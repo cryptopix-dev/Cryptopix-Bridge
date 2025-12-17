@@ -55,6 +55,7 @@ class PasswordRotationService:
         table_mapping = table_mappings[table_name]
         encrypted_columns = table_mapping.get("encrypted_columns", {})
         
+        # Return the actual encrypted column names (not the original names)
         return [col_info.get("encrypted_name", col_name) 
                 for col_name, col_info in encrypted_columns.items()]
     
@@ -83,14 +84,17 @@ class PasswordRotationService:
                     "message": "No encrypted columns"
                 }
             
+            # Get primary key column
             inspector = inspect(self.engine)
             pk_columns = inspector.get_pk_constraint(table_name).get('constrained_columns', [])
             
             if not pk_columns:
+                # Fallback to 'id' if no primary key found
                 pk_columns = ['id']
             
             pk_column = pk_columns[0]
             
+            # Count total rows
             with self.engine.connect() as conn:
                 count_query = text(f"SELECT COUNT(*) FROM {table_name}")
                 total_rows = conn.execute(count_query).scalar()
@@ -100,12 +104,14 @@ class PasswordRotationService:
             rows_processed = 0
             rows_failed = 0
             
+            # Process rows in batches
             batch_size = 100
             offset = 0
             
             while offset < total_rows:
                 try:
                     with self.engine.begin() as conn:
+                        # Fetch batch of rows
                         columns_str = f"{pk_column}, " + ", ".join(encrypted_columns)
                         select_query = text(f"""
                             SELECT {columns_str}
@@ -120,6 +126,7 @@ class PasswordRotationService:
                                 row_dict = dict(row._mapping)
                                 pk_value = row_dict[pk_column]
                                 
+                                # Decrypt and re-encrypt each encrypted column
                                 updates = []
                                 params = {pk_column: pk_value}
                                 
@@ -128,11 +135,13 @@ class PasswordRotationService:
                                     
                                     if encrypted_value is not None:
                                         try:
+                                            # Decrypt with old password
                                             decrypted_value = self.clwe_encryptor.decrypt_value(
                                                 encrypted_value, 
                                                 self.old_password
                                             )
                                             
+                                            # Re-encrypt with new password
                                             new_encrypted_value = self.clwe_encryptor.encrypt_value(
                                                 decrypted_value, 
                                                 self.new_password
@@ -146,6 +155,7 @@ class PasswordRotationService:
                                             rows_failed += 1
                                             continue
                                 
+                                # Update the row if we have any updates
                                 if updates:
                                     update_query = text(f"""
                                         UPDATE {table_name}
@@ -161,6 +171,7 @@ class PasswordRotationService:
                                 rows_failed += 1
                                 continue
                         
+                        # Update progress
                         if progress_callback:
                             progress = min(100, int((offset + len(rows)) / total_rows * 100))
                             progress_callback(table_name, progress, rows_processed, total_rows)
@@ -205,6 +216,7 @@ class PasswordRotationService:
         try:
             logger.info("Starting database-wide password rotation")
             
+            # Load table mappings
             table_mappings = self.load_table_mappings()
             
             if not table_mappings:
@@ -219,6 +231,7 @@ class PasswordRotationService:
                 "table_results": []
             }
             
+            # Process each table
             for table_name in table_mappings.keys():
                 try:
                     encrypted_columns = self.get_encrypted_columns(table_name, table_mappings)
@@ -246,6 +259,7 @@ class PasswordRotationService:
                         "error": str(e)
                     })
             
+            # Determine overall status
             if results["tables_failed"] == 0:
                 results["status"] = "success"
             elif results["tables_processed"] > 0:
@@ -285,6 +299,7 @@ class PasswordRotationService:
                 if not encrypted_columns:
                     continue
                 
+                # Get sample rows
                 with self.engine.connect() as conn:
                     columns_str = ", ".join(encrypted_columns)
                     query = text(f"""
@@ -303,11 +318,13 @@ class PasswordRotationService:
                             
                             if encrypted_value is not None:
                                 try:
+                                    # Try to decrypt with new password
                                     decrypted = self.clwe_encryptor.decrypt_value(
                                         encrypted_value,
                                         self.new_password
                                     )
                                     
+                                    # If we get here, decryption worked
                                     logger.debug(f"Verified {table_name}.{col}")
                                     
                                 except Exception as e:

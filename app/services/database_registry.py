@@ -34,8 +34,10 @@ class DatabaseRegistry:
     def _ensure_registry_exists(self):
         """Ensure the registry file and schemas directory exist"""
         try:
+            # Create schemas directory if it doesn't exist
             self.registry_file.parent.mkdir(parents=True, exist_ok=True)
             
+            # Create registry file if it doesn't exist
             if not self.registry_file.exists():
                 self._write_registry({"databases": [], "version": "1.0"})
                 logger.info(f"Created new database registry at {self.registry_file}")
@@ -89,14 +91,18 @@ class DatabaseRegistry:
             try:
                 registry = self._read_registry()
                 
+                # Generate ID if not provided
                 if not db_id:
                     db_id = f"db_{uuid.uuid4().hex[:8]}"
                 
+                # Generate schema folder if not provided
                 if not schema_folder:
+                    # Sanitize name for folder
                     import re
                     safe_name = re.sub(r'[<>:"/\\|?*]', '_', name.lower().replace(' ', '_'))
                     schema_folder = f"schemas/{safe_name}"
                 
+                # Check if database already exists
                 for db in registry["databases"]:
                     if db["id"] == db_id:
                         logger.warning(f"Database with ID {db_id} already exists")
@@ -105,6 +111,7 @@ class DatabaseRegistry:
                         logger.warning(f"Database with name '{name}' already exists")
                         return db
                 
+                # Create database entry
                 database = {
                     "id": db_id,
                     "name": name,
@@ -117,9 +124,11 @@ class DatabaseRegistry:
                     "vds_instances": []
                 }
                 
+                # Add to registry
                 registry["databases"].append(database)
                 self._write_registry(registry)
                 
+                # Create schema folder
                 Path(schema_folder).mkdir(parents=True, exist_ok=True)
                 
                 logger.info(f"Registered database '{name}' with ID {db_id}")
@@ -191,10 +200,12 @@ class DatabaseRegistry:
                 
                 for i, db in enumerate(registry["databases"]):
                     if db["id"] == db_id:
+                        # Update fields
                         for key, value in updates.items():
                             if key != "id":  # Don't allow ID changes
                                 db[key] = value
                         
+                        # Update timestamp
                         db["updated_at"] = datetime.utcnow().isoformat()
                         
                         registry["databases"][i] = db
@@ -227,6 +238,7 @@ class DatabaseRegistry:
                 
                 for i, db in enumerate(registry["databases"]):
                     if db["id"] == db_id:
+                        # Delete files if requested
                         if delete_files:
                             schema_path = Path(db["schema_folder"])
                             if schema_path.exists():
@@ -234,6 +246,7 @@ class DatabaseRegistry:
                                 shutil.rmtree(schema_path)
                                 logger.info(f"Deleted schema folder: {schema_path}")
                         
+                        # Remove from registry
                         registry["databases"].pop(i)
                         self._write_registry(registry)
                         
@@ -262,6 +275,7 @@ class DatabaseRegistry:
         """
         with self.lock:
             try:
+                # Check if port is already in use
                 if self.is_port_in_use(port):
                     logger.error(f"Port {port} is already in use by another VDS instance")
                     return None
@@ -270,6 +284,7 @@ class DatabaseRegistry:
                 
                 for db in registry["databases"]:
                     if db["id"] == db_id:
+                        # Generate VDS instance ID
                         vds_id = f"vds_{uuid.uuid4().hex[:8]}"
                         
                         vds_instance = {
@@ -425,28 +440,34 @@ class DatabaseRegistry:
         """
         with self.lock:
             try:
+                # Check if there are any databases already registered
                 registry = self._read_registry()
                 if len(registry["databases"]) > 0:
                     logger.info("Databases already registered, skipping legacy migration")
                     return False
                 
+                # Check for old schema files in root schemas folder
                 schemas_dir = Path("schemas")
                 if not schemas_dir.exists():
                     return False
                 
+                # Look for migration state files
                 state_files = list(schemas_dir.glob("*_migration_state.json"))
                 
                 if not state_files:
                     logger.info("No legacy migration state files found")
                     return False
                 
+                # Load the most recent migration state
                 latest_state_file = max(state_files, key=lambda f: f.stat().st_mtime)
                 
                 with open(latest_state_file, 'r') as f:
                     migration_state = json.load(f)
                 
+                # Extract database name from filename
                 db_name = latest_state_file.stem.replace('_migration_state', '')
                 
+                # Create new database entry
                 database = self.register_database(
                     name=db_name,
                     source_db_url=migration_state.get("source_db_url", ""),
@@ -454,6 +475,7 @@ class DatabaseRegistry:
                     schema_folder=f"schemas/{db_name}"
                 )
                 
+                # Update migration complete status
                 if migration_state.get("migration_complete"):
                     self.update_database(database["id"], {"migration_complete": True})
                 
@@ -465,4 +487,5 @@ class DatabaseRegistry:
                 return False
 
 
+# Global registry instance
 database_registry = DatabaseRegistry()

@@ -7,8 +7,10 @@ Simple script to start the CryptoPIX Bridge application
 import sys
 import os
 
+# Add the current directory to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Import and run the main application
 from app.main import app
 
 if __name__ == '__main__':
@@ -16,6 +18,7 @@ if __name__ == '__main__':
     print("VDS must be manually started from Settings page")
     print("Web interface available at http://localhost:8000")
 
+    # Run the Flask application
     app.run(
         host='0.0.0.0',
         port=8000,

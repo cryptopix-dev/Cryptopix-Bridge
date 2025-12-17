@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 import datetime
 
+# Add project to path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
@@ -93,6 +94,7 @@ def main():
     print("⚠️  Make sure you have a backup before proceeding!")
     print()
     
+    # Check if encrypted database URL is configured
     encrypted_db_url = os.getenv("ENCRYPTED_DB_URL")
     if not encrypted_db_url:
         print("❌ ERROR: ENCRYPTED_DB_URL not found in environment!")
@@ -102,6 +104,7 @@ def main():
     print(f"📊 Database: {encrypted_db_url}")
     print()
     
+    # Get old password
     print("Step 1: Enter OLD (current) encryption password")
     print("-" * 70)
     old_password = input("OLD password: ").strip()
@@ -112,6 +115,7 @@ def main():
     
     print()
     
+    # Get new password
     print("Step 2: Enter NEW encryption password")
     print("-" * 70)
     new_password = input("NEW password: ").strip()
@@ -120,6 +124,7 @@ def main():
         print("❌ New password is required!")
         return 1
     
+    # Validate new password
     is_valid, message = validate_password_strength(new_password)
     if not is_valid:
         print(f"❌ {message}")
@@ -128,6 +133,7 @@ def main():
     print(f"✅ {message}")
     print()
     
+    # Confirm new password
     confirm_password = input("Confirm NEW password: ").strip()
     
     if new_password != confirm_password:
@@ -137,6 +143,7 @@ def main():
     print("✅ Passwords match")
     print()
     
+    # Final confirmation
     print("Step 3: Confirm password rotation")
     print("-" * 70)
     print("⚠️  This operation will:")
@@ -162,6 +169,7 @@ def main():
     print("=" * 70)
     print()
     
+    # Create rotation service
     try:
         rotation_service = PasswordRotationService(
             encrypted_db_url=encrypted_db_url,
@@ -173,6 +181,7 @@ def main():
         print(f"❌ Failed to initialize rotation service: {e}")
         return 1
     
+    # Progress callback
     last_table = None
     def show_progress(table, progress, done, total):
         nonlocal last_table
@@ -181,6 +190,7 @@ def main():
             last_table = table
         print(f"   Progress: {progress:3d}% ({done:,}/{total:,} rows)", end='\r')
     
+    # Start rotation
     start_time = datetime.datetime.now()
     
     try:
@@ -206,6 +216,7 @@ def main():
         print(f"   Total rows processed: {results['total_rows_processed']:,}")
         print()
         
+        # Show table details
         print("📋 Table Details:")
         for table_result in results.get("table_results", []):
             status_icon = "✅" if table_result["status"] == "success" else "⚠️"
@@ -223,6 +234,7 @@ def main():
                 print("   All encrypted data can be decrypted with the new password")
                 print()
                 
+                # Update .env file
                 print("=" * 70)
                 print("📝 Updating configuration...")
                 print("=" * 70)

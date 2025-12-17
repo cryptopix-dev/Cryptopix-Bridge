@@ -50,48 +50,65 @@ class AIAssistant:
     """AI-powered assistant for SQL query console"""
 
     def __init__(self):
+        # Comprehensive SQL keywords and functions
         self.sql_keywords = {
+            # Basic DML
             'SELECT', 'FROM', 'WHERE', 'JOIN', 'INNER', 'LEFT', 'RIGHT', 'FULL', 'OUTER',
             'ON', 'GROUP', 'BY', 'HAVING', 'ORDER', 'BY', 'LIMIT', 'OFFSET', 'DISTINCT',
             'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE',
 
+            # DDL
             'CREATE', 'ALTER', 'DROP', 'TRUNCATE', 'MERGE', 'REPLACE',
 
+            # Advanced queries
             'WITH', 'UNION', 'INTERSECT', 'EXCEPT', 'MINUS', 'PIVOT', 'UNPIVOT',
             'OVER', 'PARTITION', 'ROWS', 'RANGE', 'PRECEDING', 'FOLLOWING',
 
+            # Conditions and operators
             'AS', 'AND', 'OR', 'NOT', 'IN', 'EXISTS', 'BETWEEN', 'LIKE', 'IS', 'NULL',
 
+            # Control flow
             'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'COALESCE', 'NULLIF', 'IFNULL',
 
+            # Aggregate functions
             'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'STDDEV', 'VARIANCE',
 
+            # Mathematical functions
             'ABS', 'ROUND', 'CEIL', 'FLOOR', 'POWER', 'SQRT', 'SIN', 'COS', 'TAN',
             'LOG', 'EXP', 'LN', 'MOD', 'GREATEST', 'LEAST',
 
+            # String functions
             'CONCAT', 'SUBSTRING', 'SUBSTR', 'LENGTH', 'LEN', 'UPPER', 'LOWER',
             'TRIM', 'LTRIM', 'RTRIM', 'REPLACE', 'REGEXP_REPLACE',
 
+            # Date/Time functions
             'NOW', 'CURRENT_DATE', 'CURRENT_TIME', 'CURRENT_TIMESTAMP',
             'DATE', 'TIME', 'YEAR', 'MONTH', 'DAY', 'HOUR', 'MINUTE', 'SECOND',
             'DATE_ADD', 'DATE_SUB', 'DATEDIFF', 'TIMESTAMPDIFF',
 
+            # Window functions
             'ROW_NUMBER', 'RANK', 'DENSE_RANK', 'NTILE', 'LAG', 'LEAD',
             'FIRST_VALUE', 'LAST_VALUE', 'NTH_VALUE',
 
+            # JSON functions (modern SQL)
             'JSON_EXTRACT', 'JSON_VALUE', 'JSON_QUERY', 'JSON_MODIFY',
 
+            # Database objects
             'TABLE', 'INDEX', 'VIEW', 'PROCEDURE', 'FUNCTION', 'TRIGGER',
             'CONSTRAINT', 'PRIMARY', 'KEY', 'FOREIGN', 'REFERENCES', 'UNIQUE',
             'CHECK', 'DEFAULT', 'AUTO_INCREMENT', 'IDENTITY',
 
+            # Transaction control
             'BEGIN', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'TRANSACTION',
 
+            # Permissions
             'GRANT', 'REVOKE', 'PRIVILEGES',
 
+            # Schema operations
             'DATABASE', 'SCHEMA', 'USE', 'SHOW', 'DESCRIBE', 'EXPLAIN', 'ANALYZE'
         }
 
+        # Table schemas with encryption information
         self.table_schemas = {
             'departments': ['id', 'name', 'location', 'budget', 'created_at'],
             'employees': ['id', 'name', 'email', 'department_id', 'salary', 'hire_date'],
@@ -99,6 +116,7 @@ class AIAssistant:
             'users': ['id', 'username', 'password', 'email', 'created_at']
         }
 
+        # Table relationships for JOIN suggestions
         self.table_relationships = {
             'employees': {
                 'departments': {'foreign_key': 'department_id', 'primary_key': 'id', 'type': 'many_to_one'}
@@ -108,6 +126,7 @@ class AIAssistant:
             }
         }
 
+        # Query patterns for complex operations
         self.query_patterns = {
             'cte': r'^\s*WITH\s+\w+\s+AS\s*\(',
             'subquery': r'SELECT.*\([^)]*SELECT.*\)',
@@ -119,19 +138,25 @@ class AIAssistant:
             'stored_procedure': r'CALL|EXEC|EXECUTE'
         }
 
+        # Table mappings for encrypted columns
         self.table_mappings: Dict[str, TableMapping] = {}
 
+        # Complete schema information from JSON files
         self.database_schemas: Dict[str, Dict[str, Any]] = {}
 
+        # Query history for pattern analysis
         self.query_history: List[Dict[str, Any]] = []
 
+        # Schema encryption integration
         self.encrypted_schemas: Dict[str, Any] = {}
         self.schema_encryption_enabled = True
 
+        # Load mappings and schemas from files
         self._load_mappings_from_files()
         self._load_schemas_from_files()
         self._load_encrypted_schemas()
 
+        # Common SQL patterns and their corrections
         self.common_mistakes = {
             r'\bselect\s+\*\s+from\s+(\w+)\s+where\s+(\w+)\s*=\s*([^\'"\s]+)(?!\s*[\'"])':  # Missing quotes
                 lambda m: f"SELECT * FROM {m.group(1)} WHERE {m.group(2)} = '{m.group(3)}'",
@@ -141,7 +166,9 @@ class AIAssistant:
                 lambda m: f"INSERT INTO {m.group(1)} ({m.group(2)}) VALUES ({m.group(3)})",
         }
 
+        # Additional corrections for unquoted string literals in INSERT
         self.insert_corrections = [
+            # Pattern to add quotes around unquoted string values in INSERT VALUES
             (r'\bINSERT\s+INTO\s+(\w+)\s*\(\s*([^)]+)\s*\)\s*VALUES\s*\(\s*([^)]+)\s*\)',
              self._correct_insert_quotes),
         ]
@@ -160,12 +187,14 @@ class AIAssistant:
                 self.table_mappings = {}
                 return
 
+            # Find mapping files
             mapping_files = list(schemas_dir.glob("*_mappings.json"))
             if not mapping_files:
                 logger.warning("No mapping files found in schemas directory. Please run migration first to generate schema files.")
                 self.table_mappings = {}
                 return
 
+            # Load the most recent mapping file
             latest_mapping = max(mapping_files, key=lambda f: f.stat().st_mtime)
 
             with open(latest_mapping, 'r') as f:
@@ -173,6 +202,7 @@ class AIAssistant:
 
             table_mappings_data = mapping_data.get("table_mappings", {})
 
+            # Convert to TableMapping objects
             self.table_mappings = {}
             for table_name, table_data in table_mappings_data.items():
                 encrypted_columns = {}
@@ -216,17 +246,20 @@ class AIAssistant:
                 self.database_schemas = {}
                 return
 
+            # Find schema files
             schema_files = list(schemas_dir.glob("*_schema.json"))
             if not schema_files:
                 logger.warning("No schema files found in schemas directory. Please run migration first to generate schema files.")
                 self.database_schemas = {}
                 return
 
+            # Load all schema files
             for schema_file in schema_files:
                 try:
                     with open(schema_file, 'r') as f:
                         schema_data = json.load(f)
 
+                    # Extract database type from filename (source or encrypted)
                     filename = schema_file.name
                     if "_source_schema.json" in filename:
                         db_type = "source"
@@ -235,6 +268,7 @@ class AIAssistant:
                     else:
                         db_type = "unknown"
 
+                    # Store schema by database type
                     self.database_schemas[db_type] = schema_data
 
                     logger.info(f"Loaded {db_type} schema from {schema_file}")
@@ -242,6 +276,7 @@ class AIAssistant:
                 except Exception as e:
                     logger.warning(f"Failed to load schema from {schema_file}: {e}")
 
+            # Update table schemas with complete information
             self._update_table_schemas_from_complete_schema()
 
         except Exception as e:
@@ -258,11 +293,14 @@ class AIAssistant:
             schemas_dir = Path("schemas")
             schemas_dir.mkdir(exist_ok=True)
 
+            # Look for encrypted schema files
             encrypted_schema_files = list(schemas_dir.glob("*_encrypted_schema.json"))
             for schema_file in encrypted_schema_files:
                 try:
+                    # Load encrypted schema
                     encrypted_schema = schema_encryption_service.load_encrypted_schema(str(schema_file))
 
+                    # Decrypt and store
                     decrypted_schema = schema_encryption_service.decrypt_schema(encrypted_schema)
                     self.encrypted_schemas[encrypted_schema.database_name] = {
                         'encrypted': encrypted_schema,
@@ -284,20 +322,24 @@ class AIAssistant:
 
     def _update_table_schemas_from_complete_schema(self):
         """Update table_schemas with complete information from loaded schemas"""
+        # Use encrypted schema as primary source for table information
         if "encrypted" in self.database_schemas:
             encrypted_schema = self.database_schemas["encrypted"]
             for table_name, table_info in encrypted_schema.get("tables", {}).items():
                 if table_name in table_info and "columns" in table_info:
+                    # Update table_schemas with complete column information
                     self.table_schemas[table_name] = []
                     for col_info in table_info["columns"]:
                         self.table_schemas[table_name].append(col_info["name"])
 
+        # Also update table relationships from foreign keys
         self._update_table_relationships_from_schema()
 
     def _update_table_relationships_from_schema(self):
         """Update table relationships from schema foreign key information"""
         self.table_relationships = {}
 
+        # Use encrypted schema for relationships
         if "encrypted" in self.database_schemas:
             encrypted_schema = self.database_schemas["encrypted"]
 
@@ -308,6 +350,7 @@ class AIAssistant:
 
                     for fk_info in foreign_keys:
                         try:
+                            # Extract foreign key relationship info
                             constrained_columns = fk_info.get("constrained_columns", [])
                             referred_table = fk_info.get("referred_table")
                             referred_columns = fk_info.get("referred_columns", [])
@@ -322,6 +365,7 @@ class AIAssistant:
                                     'type': 'many_to_one'
                                 }
 
+                                # Also add reverse relationship if not exists
                                 if referred_table not in self.table_relationships:
                                     self.table_relationships[referred_table] = {}
                                 if table_name not in self.table_relationships[referred_table]:
@@ -394,6 +438,7 @@ class AIAssistant:
             Database type string ("postgresql", "mysql", "sqlite", etc.)
         """
         try:
+            # Check database name for clues
             db_name_lower = database_name.lower()
 
             if "postgres" in db_name_lower or "pg" in db_name_lower:
@@ -405,30 +450,36 @@ class AIAssistant:
             elif "mssql" in db_name_lower or "sqlserver" in db_name_lower:
                 return "mssql"
 
+            # Check schema data for database-specific patterns
             if schema_data:
                 tables = schema_data.get('tables', {})
 
+                # Check for PostgreSQL-specific features
                 for table_info in tables.values():
                     columns = table_info.get('columns', [])
 
+                    # PostgreSQL BYTEA columns
                     for col in columns:
                         if isinstance(col, dict):
                             col_type = str(col.get('type', '')).upper()
                             if 'BYTEA' in col_type:
                                 return "postgresql"
 
+                    # PostgreSQL array syntax
                     for col in columns:
                         if isinstance(col, dict):
                             col_type = str(col.get('type', ''))
                             if col_type.endswith('[]'):
                                 return "postgresql"
 
+                    # PostgreSQL JSON types
                     for col in columns:
                         if isinstance(col, dict):
                             col_type = str(col.get('type', '')).upper()
                             if col_type in ['JSON', 'JSONB']:
                                 return "postgresql"
 
+            # Default to MySQL as it's most common
             return "mysql"
 
         except Exception as e:
@@ -448,6 +499,7 @@ class AIAssistant:
             Dict containing encryption results and metadata
         """
         try:
+            # Map string level to enum
             level_map = {
                 "basic": SchemaEncryptionLevel.BASIC,
                 "full": SchemaEncryptionLevel.FULL,
@@ -457,8 +509,10 @@ class AIAssistant:
 
             level = level_map.get(encryption_level.lower(), SchemaEncryptionLevel.AI_ENHANCED)
 
+            # Detect database type
             database_type = self._detect_database_type(schema_data, database_name)
 
+            # Use database-specific encryption
             if database_type == "postgresql":
                 encrypted_schema = schema_encryption_service.encrypt_postgresql_schema(
                     schema_data, database_name, level
@@ -468,9 +522,11 @@ class AIAssistant:
                     schema_data, database_name, level
                 )
 
+            # Save to file
             file_path = f"schemas/{database_name}_encrypted_schema.json"
             schema_encryption_service.save_encrypted_schema(encrypted_schema, file_path)
 
+            # Store in memory
             if database_type == "postgresql":
                 decrypted_schema = schema_encryption_service.decrypt_postgresql_schema(encrypted_schema)
             else:
@@ -573,6 +629,7 @@ class AIAssistant:
             encrypted_schema = schema_info['encrypted']
             decrypted_schema = schema_info['decrypted']
 
+            # Generate insights
             insights = {
                 "success": True,
                 "database_name": database_name,
@@ -638,6 +695,7 @@ class AIAssistant:
         level = encrypted_schema.encryption_level
         table_count = len(encrypted_schema.tables)
 
+        # Base performance impact by encryption level
         impacts = {
             SchemaEncryptionLevel.NONE: {"cpu_overhead": 0, "memory_overhead": 0, "query_latency_increase": 0},
             SchemaEncryptionLevel.BASIC: {"cpu_overhead": 5, "memory_overhead": 10, "query_latency_increase": 2},
@@ -647,6 +705,7 @@ class AIAssistant:
 
         base_impact = impacts.get(level, impacts[SchemaEncryptionLevel.NONE])
 
+        # Scale by table count
         scale_factor = min(table_count / 10, 3)  # Cap at 3x for very large schemas
 
         return {
@@ -711,15 +770,19 @@ class AIAssistant:
             Dict containing query results and schema-aware insights
         """
         try:
+            # Determine database name if not provided
             if not database_name:
                 database_name = self._extract_database_from_query(query)
 
+            # Get schema information
             schema_info = None
             if database_name and database_name in self.encrypted_schemas:
                 schema_info = self.encrypted_schemas[database_name]
 
+            # Analyze query in context of encrypted schema
             analysis = self._analyze_query_with_schema_context(query, schema_info)
 
+            # Generate optimized query suggestions
             suggestions = self._generate_schema_aware_suggestions(query, schema_info)
 
             result = {
@@ -747,6 +810,8 @@ class AIAssistant:
 
     def _extract_database_from_query(self, query: str) -> Optional[str]:
         """Extract database name from query (if specified)"""
+        # Look for database.table patterns or explicit database references
+        # For now, return the first available encrypted schema
         if self.encrypted_schemas:
             return next(iter(self.encrypted_schemas.keys()))
         return None
@@ -766,6 +831,7 @@ class AIAssistant:
 
         encrypted_schema = schema_info['encrypted']
 
+        # Analyze query complexity
         query_upper = query.upper()
         if 'JOIN' in query_upper:
             analysis["complexity"] = "high"
@@ -774,14 +840,17 @@ class AIAssistant:
         else:
             analysis["complexity"] = "simple"
 
+        # Check encryption impact
         if encrypted_schema.encryption_level != SchemaEncryptionLevel.NONE:
             analysis["encryption_impact"] = encrypted_schema.encryption_level.value
             analysis["security_notes"].append(f"Query operates on {encrypted_schema.encryption_level.value} encrypted schema")
 
+        # Performance considerations
         if encrypted_schema.encryption_level in [SchemaEncryptionLevel.FULL, SchemaEncryptionLevel.AI_ENHANCED]:
             analysis["performance_notes"].append("Full schema encryption may impact query performance")
             analysis["performance_notes"].append("Consider schema caching for frequently accessed tables")
 
+        # AI context insights
         if encrypted_schema.ai_context:
             ai_context = encrypted_schema.ai_context
             table_count = ai_context.get('table_count', 0)
@@ -799,9 +868,11 @@ class AIAssistant:
 
         encrypted_schema = schema_info['encrypted']
 
+        # AI-enhanced suggestions based on schema context
         if encrypted_schema.encryption_level == SchemaEncryptionLevel.AI_ENHANCED:
             ai_context = encrypted_schema.ai_context
 
+            # Suggest queries based on schema relationships
             relationships = ai_context.get('relationships', [])
             if relationships:
                 suggestions.append({
@@ -810,6 +881,7 @@ class AIAssistant:
                     "example": "SELECT * FROM table1 JOIN table2 ON table1.fk = table2.pk"
                 })
 
+            # Suggest queries based on common patterns
             query_patterns = ai_context.get('query_patterns', [])
             if query_patterns:
                 suggestions.append({
@@ -818,6 +890,7 @@ class AIAssistant:
                     "patterns": query_patterns[:3]  # Show first 3
                 })
 
+        # Security-focused suggestions
         if encrypted_schema.encryption_level != SchemaEncryptionLevel.NONE:
             suggestions.append({
                 "type": "security_reminder",
@@ -837,19 +910,24 @@ class AIAssistant:
         try:
             logger.info("Manually importing schemas and mappings from files")
 
+            # Clear existing data
             self.table_mappings = {}
             self.database_schemas = {}
 
+            # Reload mappings and schemas
             self._load_mappings_from_files()
             self._load_schemas_from_files()
 
+            # Update table schemas with complete information
             self._update_table_schemas_from_complete_schema()
             self._update_table_relationships_from_schema()
 
+            # Count loaded items
             mapping_count = len(self.table_mappings)
             schema_count = len(self.database_schemas)
             table_count = len(self.table_schemas)
 
+            # Count encrypted columns
             encrypted_columns = 0
             for table_mapping in self.table_mappings.values():
                 encrypted_columns += len(table_mapping.encrypted_columns)
@@ -892,17 +970,20 @@ class AIAssistant:
         columns_part = match.group(2)
         values_part = match.group(3)
 
+        # Extract content between parentheses
         if values_part.startswith('(') and values_part.endswith(')'):
             values_content = values_part[1:-1]
         else:
             values_content = values_part
 
+        # Parse the VALUES part to add quotes around unquoted strings
         corrected_values = self._add_quotes_to_values(values_content)
 
         return f"INSERT INTO {table_name} ({columns_part}) VALUES ({corrected_values})"
 
     def _add_quotes_to_values(self, values_str: str) -> str:
         """Add quotes around unquoted string literals in VALUES clause"""
+        # Split by comma but be careful with quoted strings
         parts = []
         current_part = ""
         in_string = False
@@ -917,6 +998,7 @@ class AIAssistant:
                 string_char = char
                 current_part += char
             elif in_string and char == string_char:
+                # Check for escaped quotes
                 if i + 1 < len(values_str) and values_str[i + 1] == string_char:
                     current_part += char + char
                     i += 1
@@ -934,9 +1016,11 @@ class AIAssistant:
         if current_part.strip():
             parts.append(current_part.strip())
 
+        # Process each part to add quotes if needed
         corrected_parts = []
         for part in parts:
             part = part.strip()
+            # If it's not already quoted and not a number or NULL/DEFAULT, add quotes
             if not ((part.startswith("'") and part.endswith("'")) or
                     (part.startswith('"') and part.endswith('"')) or
                     part.upper() in ('NULL', 'DEFAULT') or
@@ -966,6 +1050,7 @@ class AIAssistant:
             Tuple of (translated_query, metadata)
         """
         try:
+            # Apply INSERT corrections first
             original_query = query
             for pattern, correction_func in self.insert_corrections:
                 match = re.search(pattern, query, re.IGNORECASE | re.DOTALL)
@@ -975,13 +1060,17 @@ class AIAssistant:
 
             query_upper = query.upper().strip()
 
+            # Add to query history for pattern analysis
             self._add_to_query_history(original_query, 'translate')
 
+            # Detect query complexity
             complexity = self._analyze_query_complexity(query)
 
+            # Determine table name if not provided
             if not table_name:
                 table_name = self._extract_table_name(query)
 
+            # Handle complex queries
             if complexity['has_cte']:
                 return self._translate_cte_query(query)
             elif complexity['has_subquery']:
@@ -990,6 +1079,7 @@ class AIAssistant:
                 return self._translate_complex_join_query(query)
 
             if not table_name or table_name not in self.table_mappings:
+                # No mapping needed or table not found
                 return query, {
                     'query_type': self._determine_query_type(query),
                     'table_name': table_name,
@@ -1012,6 +1102,7 @@ class AIAssistant:
             elif query_upper.startswith('WITH'):
                 return self._translate_cte_query(query)
             else:
+                # Non-modifying query or unknown
                 return query, {
                     'query_type': self._determine_query_type(query),
                     'table_name': table_name,
@@ -1031,6 +1122,7 @@ class AIAssistant:
         """Extract table name from query"""
         query_upper = query.upper()
 
+        # Try different patterns to find table name
         patterns = [
             r'FROM\s+(\w+)',
             r'INTO\s+(\w+)',
@@ -1068,10 +1160,13 @@ class AIAssistant:
     def _translate_select_query(self, query: str, table_mapping: TableMapping) -> Tuple[str, Dict[str, Any]]:
         """Translate SELECT query for encrypted columns with deterministic encryption"""
         try:
+            # Parse the SELECT query to identify WHERE, ORDER BY, GROUP BY clauses
+            # Updated to handle table aliases like "FROM employees e"
             select_pattern = r'SELECT\s+(.+?)\s+FROM\s+([\w\s]+)(?:\s+WHERE\s+(.+?))?(?:\s+GROUP\s+BY\s+(.+?))?(?:\s+ORDER\s+BY\s+(.+?))?(?:\s+LIMIT\s+(\d+))?(?:\s+OFFSET\s+(\d+))?$'
             match = re.match(select_pattern, query, re.IGNORECASE | re.DOTALL)
 
             if not match:
+                # Return original query if parsing fails
                 return query, {
                     'query_type': 'SELECT',
                     'table_name': table_mapping.original_name,
@@ -1081,21 +1176,26 @@ class AIAssistant:
 
             select_clause, table_name, where_clause, group_clause, order_clause, limit_clause, offset_clause = match.groups()
 
+            # Start building the translated query
             translated_parts = [f"SELECT {select_clause} FROM {table_name}"]
 
+            # Handle WHERE clause
             if where_clause:
                 translated_where = self._translate_where_clause(where_clause.strip(), table_mapping)
                 if translated_where:
                     translated_parts.append(f"WHERE {translated_where}")
 
+            # Handle GROUP BY clause
             if group_clause:
                 translated_parts.append(f"GROUP BY {group_clause.strip()}")
 
+            # Handle ORDER BY clause
             if order_clause:
                 translated_order = self._translate_order_clause(order_clause.strip(), table_mapping)
                 if translated_order:
                     translated_parts.append(f"ORDER BY {translated_order}")
 
+            # Handle LIMIT and OFFSET
             if limit_clause:
                 translated_parts.append(f"LIMIT {limit_clause}")
             if offset_clause:
@@ -1129,10 +1229,12 @@ class AIAssistant:
     def _translate_insert_query(self, query: str, table_mapping: TableMapping) -> Tuple[str, Dict[str, Any]]:
         """Translate INSERT query for encrypted columns with schema-aware auto-increment handling"""
         try:
+            # Parse INSERT query - handle multiple VALUES clauses
             insert_pattern = r'INSERT\s+INTO\s+(\w+)\s*\(\s*([^)]+)\s*\)\s*VALUES\s*(.+)$'
             match = re.match(insert_pattern, query, re.IGNORECASE | re.DOTALL)
 
             if not match:
+                # Return original query if parsing fails
                 return query, {
                     'query_type': 'INSERT',
                     'table_name': table_mapping.original_name,
@@ -1142,10 +1244,13 @@ class AIAssistant:
 
             table_name, columns_str, values_part = match.groups()
 
+            # Strip trailing semicolon if present
             values_part = values_part.rstrip(';').strip()
 
+            # Parse columns
             columns = [col.strip() for col in columns_str.split(',')]
 
+            # Parse multiple VALUES clauses - split on '), (' but be careful with nested content
             values_clauses = []
             current_clause = ""
             paren_depth = 0
@@ -1161,6 +1266,7 @@ class AIAssistant:
                     string_char = char
                     current_clause += char  # Add the opening quote
                 elif in_string and char == string_char:
+                    # Check for escaped quotes
                     if i + 1 < len(values_part) and values_part[i + 1] == string_char:
                         current_clause += char + char
                         i += 1  # Skip escaped quote
@@ -1187,6 +1293,7 @@ class AIAssistant:
 
                 i += 1
 
+            # Clean up values clauses (remove surrounding parentheses)
             cleaned_values_clauses = []
             for clause in values_clauses:
                 if clause.startswith('(') and clause.endswith(')'):
@@ -1201,6 +1308,7 @@ class AIAssistant:
                     'error': 'No VALUES clauses found'
                 }
 
+            # Check if all value clauses have the same number of values as columns
             for i, clause in enumerate(cleaned_values_clauses):
                 values = self._parse_values_list(clause)
                 if len(values) != len(columns):
@@ -1211,17 +1319,23 @@ class AIAssistant:
                         'error': f'VALUES clause {i+1} has {len(values)} values but {len(columns)} columns expected'
                     }
 
+            # Get primary keys and auto-increment info from schema
             primary_keys = self.get_primary_keys(table_name)
 
+            # Build the column list for the translated query
             final_columns = []
 
+            # First, add all non-encrypted columns and encrypted columns
             for col in columns:
                 col = col.strip()
                 if col in table_mapping.encrypted_columns:
+                    # Add encrypted column and its tag column
                     final_columns.append(col)
                     final_columns.append(table_mapping.encrypted_columns[col].tag_name)
                 else:
+                    # Skip auto-increment primary keys if NULL/empty in ALL value clauses
                     if col in primary_keys and self.is_auto_increment_column(table_name, col):
+                        # Check if all value clauses have NULL/empty for this auto-increment PK
                         skip_pk = True
                         for clause in cleaned_values_clauses:
                             values = self._parse_values_list(clause)
@@ -1235,6 +1349,7 @@ class AIAssistant:
                     else:
                         final_columns.append(col)
 
+            # Build VALUES clauses
             final_values_clauses = []
 
             for clause in cleaned_values_clauses:
@@ -1248,32 +1363,41 @@ class AIAssistant:
                     if col in table_mapping.encrypted_columns:
                         col_mapping = table_mapping.encrypted_columns[col]
 
+                        # Handle auto-increment primary keys - skip if NULL/empty
                         if col in primary_keys and self.is_auto_increment_column(table_name, col):
                             if val.upper() in ('NULL', 'DEFAULT', '') or val.strip("'\"") in ('', 'NULL'):
                                 continue  # Skip this column entirely for auto-increment
                             else:
+                                # If a specific value is provided, include it
                                 final_values.append(val)
                                 continue
 
+                        # Encrypt the value
                         try:
+                            # Remove quotes from string values for encryption
                             if (val.startswith("'") and val.endswith("'")) or (val.startswith('"') and val.endswith('"')):
                                 clean_val = val[1:-1]
                             else:
                                 clean_val = val
 
+                            # Convert to string for consistent tag generation (matching migration behavior)
                             str_value = str(clean_val) if clean_val is not None else ''
 
+                            # Encrypt the value
                             encrypted_blob = clwe_encryptor.encrypt_value(clean_val, settings.CRYPTOPIX_DEFAULT_PASSWORD)
                             final_values.append(f"X'{encrypted_blob.hex()}'")
 
+                            # Add tag value
                             unified_tag = clwe_encryptor.generate_unified_tag(str_value, col_mapping.data_type)
                             final_values.append(f"'{unified_tag}'")
 
                         except Exception as e:
                             logger.error(f"Failed to encrypt value for column {col}: {e}")
+                            # Fallback to original value
                             final_values.append(val)
                             final_values.append("''")  # Empty tag as fallback
                     else:
+                        # Non-encrypted column - but skip auto-increment primary keys if NULL/empty
                         if col in primary_keys and self.is_auto_increment_column(table_name, col):
                             if val.upper() in ('NULL', 'DEFAULT', '') or val.strip("'\"") in ('', 'NULL'):
                                 continue  # Skip for auto-increment
@@ -1286,6 +1410,7 @@ class AIAssistant:
 
                 final_values_clauses.append(f"({', '.join(final_values)})")
 
+            # Build translated query
             translated_query = f"INSERT INTO {table_name} ({', '.join(final_columns)}) VALUES {', '.join(final_values_clauses)}"
 
             metadata = {
@@ -1314,10 +1439,12 @@ class AIAssistant:
     def _translate_update_query(self, query: str, table_mapping: TableMapping) -> Tuple[str, Dict[str, Any]]:
         """Translate UPDATE query for encrypted columns with deterministic encryption"""
         try:
+            # Parse UPDATE query
             update_pattern = r'UPDATE\s+(\w+)\s+SET\s+(.+?)(?:\s+WHERE\s+(.+))?$'
             match = re.match(update_pattern, query, re.IGNORECASE | re.DOTALL)
 
             if not match:
+                # Return original query if parsing fails
                 return query, {
                     'query_type': 'UPDATE',
                     'table_name': table_mapping.original_name,
@@ -1327,6 +1454,7 @@ class AIAssistant:
 
             table_name, set_clause, where_clause = match.groups()
 
+            # Parse SET clause
             set_assignments = []
             for assignment in set_clause.split(','):
                 assignment = assignment.strip()
@@ -1335,44 +1463,59 @@ class AIAssistant:
                     col = col.strip()
                     val = val.strip()
 
+                    # Check if this column is encrypted
                     if col in table_mapping.encrypted_columns:
                         col_mapping = table_mapping.encrypted_columns[col]
 
+                        # Skip primary keys - they should never be encrypted
                         if col == table_mapping.primary_key:
                             set_assignments.append(f"{col} = {val}")
                             continue
 
+                        # Encrypt the value
                         try:
+                            # Check if this is a mathematical expression involving the column itself
+                            # e.g., salary = salary * 1.1 or credit_limit = credit_limit + 10000
                             if any(op in val for op in ['+', '-', '*', '/']) and col in val:
+                                # This is a mathematical expression - leave it as-is for the console service to handle
                                 set_assignments.append(f"{col} = {val}")
                             else:
+                                # Remove quotes from string values for encryption
                                 if (val.startswith("'") and val.endswith("'")) or (val.startswith('"') and val.endswith('"')):
                                     clean_val = val[1:-1]
                                 else:
                                     clean_val = val
 
+                                # Convert to string for consistent tag generation (matching migration behavior)
                                 str_value = str(clean_val) if clean_val is not None else ''
 
+                                # Encrypt the value
                                 encrypted_blob = clwe_encryptor.encrypt_value(clean_val, settings.CRYPTOPIX_DEFAULT_PASSWORD)
                                 set_assignments.append(f"{col} = X'{encrypted_blob.hex()}'")
 
+                                # Update the corresponding tag column (using same format as migration)
                                 unified_tag = clwe_encryptor.generate_unified_tag(str_value, col_mapping.data_type)
                                 set_assignments.append(f"{col_mapping.tag_name} = '{unified_tag}'")
 
                         except Exception as e:
                             logger.error(f"Failed to encrypt value for column {col}: {e}")
+                            # Fallback to original value
                             set_assignments.append(f"{col} = {val}")
                     else:
+                        # Non-encrypted column
                         set_assignments.append(f"{col} = {val}")
 
+            # Build SET clause
             translated_set = ', '.join(set_assignments)
 
+            # Handle WHERE clause
             translated_where = ""
             if where_clause:
                 translated_where_clause = self._translate_where_clause(where_clause.strip(), table_mapping)
                 if translated_where_clause:
                     translated_where = f" WHERE {translated_where_clause}"
 
+            # Build translated query
             translated_query = f"UPDATE {table_name} SET {translated_set}{translated_where}"
 
             metadata = {
@@ -1398,6 +1541,7 @@ class AIAssistant:
     def _translate_where_clause(self, where_clause: str, table_mapping: TableMapping) -> str:
         """Translate WHERE clause for encrypted columns with deterministic encryption"""
         try:
+            # Split WHERE clause into conditions (handle AND/OR)
             conditions = self._parse_where_conditions(where_clause)
 
             translated_conditions = []
@@ -1417,16 +1561,20 @@ class AIAssistant:
     def _translate_order_clause(self, order_clause: str, table_mapping: TableMapping) -> str:
         """Translate ORDER BY clause for encrypted columns using OPE component"""
         try:
+            # Parse ORDER BY items
             order_items = [item.strip() for item in order_clause.split(',')]
             translated_items = []
 
             for item in order_items:
+                # Check if it has ASC/DESC
                 parts = item.split()
                 col_name = parts[0]
                 direction = parts[1] if len(parts) > 1 else 'ASC'
 
+                # If column is encrypted, use OPE component of tag for ordering
                 if col_name in table_mapping.encrypted_columns:
                     tag_col = table_mapping.encrypted_columns[col_name].tag_name
+                    # Use SUBSTR to extract OPE component (chars 16-31, which is positions 17-32 in SQL)
                     translated_items.append(f"SUBSTR({tag_col}, 17, 16) {direction}")
                 else:
                     translated_items.append(item)
@@ -1439,8 +1587,10 @@ class AIAssistant:
 
     def _parse_where_conditions(self, where_clause: str) -> List[str]:
         """Parse WHERE clause into individual conditions"""
+        # First, identify BETWEEN clauses and protect them from splitting
         protected_clause = where_clause
 
+        # Replace "BETWEEN x AND y" with a placeholder to avoid splitting on the AND
         between_pattern = r'BETWEEN\s+(.+?)\s+AND\s+(.+?)(?=\s*(?:AND|OR|$))'
         between_placeholders = []
 
@@ -1451,6 +1601,7 @@ class AIAssistant:
 
         protected_clause = re.sub(between_pattern, replace_between, protected_clause, flags=re.IGNORECASE | re.DOTALL)
 
+        # Now split on AND/OR
         conditions = []
         current_condition = ""
         paren_depth = 0
@@ -1477,6 +1628,7 @@ class AIAssistant:
             elif not in_string and paren_depth == 0 and protected_clause[i:i+3].upper() in ['AND', ' OR']:
                 if current_condition.strip():
                     conditions.append(current_condition.strip())
+                # Skip the AND/OR
                 while i < len(protected_clause) and protected_clause[i].isspace():
                     i += 1
                 if protected_clause[i:i+3].upper() == 'AND':
@@ -1495,6 +1647,7 @@ class AIAssistant:
         if current_condition.strip():
             conditions.append(current_condition.strip())
 
+        # Restore BETWEEN clauses
         final_conditions = []
         for condition in conditions:
             restored_condition = condition
@@ -1507,21 +1660,27 @@ class AIAssistant:
     def _translate_single_condition(self, condition: str, table_mapping: TableMapping) -> str:
         """Translate a single WHERE condition"""
         try:
+            # Handle different condition types
             condition_upper = condition.upper()
 
+            # LIKE conditions
             if ' LIKE ' in condition_upper:
                 return self._translate_like_condition(condition, table_mapping)
 
+            # BETWEEN conditions
             if ' BETWEEN ' in condition_upper:
                 return self._translate_between_condition(condition, table_mapping)
 
+            # IN conditions
             if ' IN ' in condition_upper:
                 return self._translate_in_condition(condition, table_mapping)
 
+            # Comparison operators
             for op in ['>=', '<=', '!=', '<>', '>', '<', '=']:
                 if f' {op} ' in condition_upper or f'{op}' in condition_upper:
                     return self._translate_comparison_condition(condition, op, table_mapping)
 
+            # If no operator found, return as-is
             return condition
 
         except Exception as e:
@@ -1531,6 +1690,7 @@ class AIAssistant:
     def _translate_like_condition(self, condition: str, table_mapping: TableMapping) -> str:
         """Translate LIKE condition using partial match hash component"""
         try:
+            # Parse LIKE condition: column LIKE 'pattern'
             like_pattern = r'(\w+)\s+LIKE\s+(.+)'
             match = re.match(like_pattern, condition, re.IGNORECASE)
 
@@ -1539,27 +1699,36 @@ class AIAssistant:
                 col_name = col_name.strip()
                 pattern = pattern.strip()
 
+                # Handle table-qualified column names (e.g., "user.email" -> "email")
                 actual_col_name = col_name
                 if '.' in col_name:
                     actual_col_name = col_name.split('.')[-1].strip()
 
                 if actual_col_name in table_mapping.encrypted_columns:
+                    # Remove quotes from pattern
                     clean_pattern = pattern.strip("'\"")
                     tag_col = table_mapping.encrypted_columns[actual_col_name].tag_name
+                    # If original had table prefix, add it to tag column too
                     if '.' in col_name:
                         table_prefix = col_name.rsplit('.', 1)[0]
                         tag_col = f"{table_prefix}.{tag_col}"
 
+                    # For simple prefix patterns like 'J%', use partial hash comparison
                     if clean_pattern.endswith('%') and not any(char in clean_pattern[:-1] for char in ['_', '%', '[']):
+                        # Generate partial hash for the prefix
                         prefix = clean_pattern[:-1]  # Remove %
                         if prefix:  # Only if there's a prefix to match
                             partial_hash = clwe_encryptor._generate_partial_hash(prefix)
+                            # The partial hash starts at position 32 (0-indexed as 32)
+                            # For prefix of length N, we need the first (N*2) characters
                             prefix_length = len(prefix)
                             hash_length = prefix_length * 2
                             return f"SUBSTR({tag_col}, 33, {hash_length}) = '{partial_hash[:hash_length]}'"
                         else:
+                            # Pattern is just '%', match everything
                             return "1=1"  # Always true condition
                     else:
+                        # For complex patterns, fall back to full tag LIKE
                         return f"{tag_col} LIKE {pattern}"
 
             return condition
@@ -1571,6 +1740,7 @@ class AIAssistant:
     def _translate_between_condition(self, condition: str, table_mapping: TableMapping) -> str:
         """Translate BETWEEN condition using OPE component"""
         try:
+            # Parse BETWEEN condition: column BETWEEN value1 AND value2
             between_pattern = r'(\w+)\s+BETWEEN\s+(.+)\s+AND\s+(.+)'
             match = re.search(between_pattern, condition, re.IGNORECASE)
 
@@ -1578,17 +1748,22 @@ class AIAssistant:
                 col_name, value1, value2 = match.groups()
                 col_name = col_name.strip()
 
+                # Handle table-qualified column names (e.g., "user.email" -> "email")
                 actual_col_name = col_name
                 if '.' in col_name:
                     actual_col_name = col_name.split('.')[-1].strip()
 
                 if actual_col_name in table_mapping.encrypted_columns:
+                    # Use OPE component for BETWEEN operations
                     tag_col = table_mapping.encrypted_columns[actual_col_name].tag_name
+                    # If original had table prefix, add it to tag column too
                     if '.' in col_name:
                         table_prefix = col_name.rsplit('.', 1)[0]
                         tag_col = f"{table_prefix}.{tag_col}"
+                    # Generate OPE values for both bounds
                     ope_value1 = clwe_encryptor._generate_order_preserving_value(value1.strip().strip("'\""), 'text')
                     ope_value2 = clwe_encryptor._generate_order_preserving_value(value2.strip().strip("'\""), 'text')
+                    # Compare against OPE component (chars 16-31)
                     return f"SUBSTR({tag_col}, 17, 16) BETWEEN '{ope_value1}' AND '{ope_value2}'"
 
             return condition
@@ -1600,6 +1775,7 @@ class AIAssistant:
     def _translate_in_condition(self, condition: str, table_mapping: TableMapping) -> str:
         """Translate IN condition by encrypting each value"""
         try:
+            # Parse IN condition: column IN (value1, value2, ...)
             in_pattern = r'(\w+)\s+IN\s*\((.+)\)'
             match = re.match(in_pattern, condition, re.IGNORECASE)
 
@@ -1607,19 +1783,24 @@ class AIAssistant:
                 col_name, values_str = match.groups()
                 col_name = col_name.strip()
 
+                # Handle table-qualified column names (e.g., "user.email" -> "email")
                 actual_col_name = col_name
                 if '.' in col_name:
                     actual_col_name = col_name.split('.')[-1].strip()
 
                 if actual_col_name in table_mapping.encrypted_columns:
+                    # Parse and encrypt each value in the IN list
                     values = [v.strip() for v in values_str.split(',')]
                     encrypted_values = []
 
                     for value in values:
+                        # Remove quotes if present
                         clean_value = value.strip("'\"")
+                        # Encrypt the value
                         encrypted_blob = clwe_encryptor.encrypt_value(clean_value, settings.CRYPTOPIX_DEFAULT_PASSWORD)
                         encrypted_values.append(f"X'{encrypted_blob.hex()}'")
 
+                    # Use original col_name (with table prefix if present) in the output
                     return f"{col_name} IN ({', '.join(encrypted_values)})"
 
             return condition
@@ -1631,26 +1812,36 @@ class AIAssistant:
     def _translate_comparison_condition(self, condition: str, op: str, table_mapping: TableMapping) -> str:
         """Translate comparison condition (=, >, <, etc.) using appropriate tag components"""
         try:
+            # Split condition by operator
             parts = re.split(rf'\s*{re.escape(op)}\s*', condition, flags=re.IGNORECASE)
             if len(parts) == 2:
                 col_name = parts[0].strip()
                 value = parts[1].strip()
 
+                # Handle table-qualified column names (e.g., "user.email" -> "email")
                 actual_col_name = col_name
                 if '.' in col_name:
+                    # Extract just the column name without the table prefix
                     actual_col_name = col_name.split('.')[-1].strip()
                     logger.debug(f"Extracted column name '{actual_col_name}' from qualified name '{col_name}'")
 
                 if actual_col_name in table_mapping.encrypted_columns:
+                    # For exact match (=), use encrypted value directly (deterministic encryption)
                     if op == '=':
+                        # Remove quotes if present
                         clean_value = value.strip("'\"")
+                        # Encrypt the value
                         encrypted_blob = clwe_encryptor.encrypt_value(clean_value, settings.CRYPTOPIX_DEFAULT_PASSWORD)
+                        # Use the original col_name (with table prefix if present) in the output
                         return f"{col_name} = X'{encrypted_blob.hex()}'"
                     else:
+                        # For range operations, use OPE component of tag (chars 16-31)
                         tag_col = table_mapping.encrypted_columns[actual_col_name].tag_name
+                        # If original had table prefix, add it to tag column too
                         if '.' in col_name:
                             table_prefix = col_name.rsplit('.', 1)[0]
                             tag_col = f"{table_prefix}.{tag_col}"
+                        # Generate OPE value for the comparison value
                         ope_value = clwe_encryptor._generate_order_preserving_value(value.strip("'\""), 'text')
                         return f"SUBSTR({tag_col}, 17, 16) {op} '{ope_value}'"
 
@@ -1663,10 +1854,12 @@ class AIAssistant:
     def _translate_delete_query(self, query: str, table_mapping: TableMapping) -> Tuple[str, Dict[str, Any]]:
         """Translate DELETE query for encrypted columns with deterministic encryption"""
         try:
+            # Parse the DELETE query to identify WHERE clause
             delete_pattern = r'DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+))?$'
             match = re.match(delete_pattern, query, re.IGNORECASE | re.DOTALL)
 
             if not match:
+                # Return original query if parsing fails
                 return query, {
                     'query_type': 'DELETE',
                     'table_name': table_mapping.original_name,
@@ -1676,8 +1869,10 @@ class AIAssistant:
 
             table_name, where_clause = match.groups()
 
+            # Start building the translated query
             translated_parts = [f"DELETE FROM {table_name}"]
 
+            # Handle WHERE clause
             if where_clause:
                 translated_where = self._translate_where_clause(where_clause.strip(), table_mapping)
                 if translated_where:
@@ -1720,6 +1915,7 @@ class AIAssistant:
 
     def _translate_cte_query(self, query: str) -> Tuple[str, Dict[str, Any]]:
         """Translate Common Table Expression (CTE) queries"""
+        # CTE queries with WITH clause - handle encrypted columns in CTE and main query
         translated_query = query
         metadata = {
             'query_type': 'CTE',
@@ -1731,6 +1927,7 @@ class AIAssistant:
 
     def _translate_subquery_query(self, query: str) -> Tuple[str, Dict[str, Any]]:
         """Translate queries with subqueries"""
+        # Handle subqueries in SELECT, WHERE, FROM clauses
         translated_query = query
         metadata = {
             'query_type': 'SUBQUERY',
@@ -1743,6 +1940,7 @@ class AIAssistant:
     def _translate_complex_join_query(self, query: str) -> Tuple[str, Dict[str, Any]]:
         """Translate JOIN queries with encrypted columns"""
         try:
+            # Parse the JOIN query
             join_info = self._parse_join_query(query)
             if not join_info:
                 return query, {
@@ -1752,6 +1950,7 @@ class AIAssistant:
                     'complexity': 'high'
                 }
 
+            # Translate the query
             translated_query = self._build_translated_join_query(query, join_info)
 
             metadata = {
@@ -1776,6 +1975,7 @@ class AIAssistant:
 
     def _translate_ddl_query(self, query: str) -> Tuple[str, Dict[str, Any]]:
         """Translate DDL queries (CREATE, ALTER, DROP)"""
+        # DDL queries for table creation/modification
         translated_query = query
         metadata = {
             'query_type': 'DDL',
@@ -1793,6 +1993,7 @@ class AIAssistant:
             'complexity': self._analyze_query_complexity(query)
         })
 
+        # Keep only last 100 queries
         if len(self.query_history) > 100:
             self.query_history.pop(0)
 
@@ -1821,19 +2022,25 @@ class AIAssistant:
                 suggestions['suggestions'] = self._get_initial_suggestions()
                 return suggestions
 
+            # Analyze query complexity
             complexity = self._analyze_query_complexity(partial_query)
             suggestions['complexity_analysis'] = complexity
 
+            # Get context-aware completions
             suggestions['completions'] = self._get_completions(partial_query, cursor_position)
 
+            # Check for common mistakes and provide corrections
             corrections = self._check_for_corrections(partial_query)
             if corrections:
                 suggestions['corrections'] = corrections
 
+            # Provide intelligent suggestions based on complexity
             suggestions['suggestions'] = self._get_context_suggestions(partial_query)
 
+            # Add optimization suggestions
             suggestions['optimizations'] = self._get_optimization_suggestions(partial_query, complexity)
 
+            # Add advanced query pattern suggestions
             advanced_suggestions = self._get_advanced_query_suggestions(partial_query, complexity)
             suggestions['suggestions'].extend(advanced_suggestions)
 
@@ -1848,9 +2055,11 @@ class AIAssistant:
         completions = []
         query_upper = partial_query.upper()
 
+        # Find the current word being typed
         if cursor_position is None:
             cursor_position = len(partial_query)
 
+        # Get the word at cursor position
         words = re.findall(r'\b\w+\b', partial_query[:cursor_position])
         current_word = words[-1] if words else ""
 
@@ -1859,12 +2068,15 @@ class AIAssistant:
 
         current_word_upper = current_word.upper()
 
+        # SQL keyword completions
         keyword_matches = [kw for kw in self.sql_keywords if kw.startswith(current_word_upper)]
         completions.extend(keyword_matches)
 
+        # Table name completions
         table_matches = [table for table in self.table_schemas.keys() if table.startswith(current_word.lower())]
         completions.extend(table_matches)
 
+        # Column name completions based on context
         column_completions = self._get_column_completions(partial_query, current_word)
         completions.extend(column_completions)
 
@@ -1874,6 +2086,7 @@ class AIAssistant:
         """Get column name completions based on query context"""
         completions = []
 
+        # Find table references in the query
         table_matches = re.findall(r'\bFROM\s+(\w+)', query, re.IGNORECASE)
         table_matches.extend(re.findall(r'\bJOIN\s+(\w+)', query, re.IGNORECASE))
 
@@ -1904,6 +2117,7 @@ class AIAssistant:
                 except Exception as e:
                     logger.warning(f"Error applying correction: {e}")
 
+        # Check for missing semicolons at end
         if not query.strip().endswith(';') and not query.strip().upper().startswith(('SELECT', 'SHOW', 'SYSTEM')):
             corrections.append({
                 'original': query,
@@ -1918,9 +2132,11 @@ class AIAssistant:
         suggestions = []
         query_upper = query.upper().strip()
 
+        # Initial suggestions for empty queries
         if not query.strip():
             return self._get_initial_suggestions()
 
+        # Suggestions based on query type
         if query_upper.startswith('SELECT'):
             suggestions.extend(self._get_select_suggestions(query))
         elif query_upper.startswith('INSERT'):
@@ -1930,6 +2146,7 @@ class AIAssistant:
         elif query_upper.startswith('DELETE'):
             suggestions.extend(self._get_delete_suggestions(query))
 
+        # General suggestions
         if 'WHERE' not in query_upper and 'SELECT' in query_upper:
             suggestions.append({
                 'query': query + ' WHERE ',
@@ -1975,6 +2192,7 @@ class AIAssistant:
         """Get suggestions for SELECT queries"""
         suggestions = []
 
+        # If it's just "SELECT", suggest common patterns
         if re.match(r'^\s*SELECT\s*$', query, re.IGNORECASE):
             for table, columns in self.table_schemas.items():
                 suggestions.append({
@@ -1983,6 +2201,7 @@ class AIAssistant:
                     'type': 'template'
                 })
 
+        # If selecting from a table, suggest WHERE clauses
         table_match = re.search(r'FROM\s+(\w+)', query, re.IGNORECASE)
         if table_match:
             table_name = table_match.group(1).lower()
@@ -2001,6 +2220,7 @@ class AIAssistant:
         """Get suggestions for INSERT queries"""
         suggestions = []
 
+        # If it's just "INSERT", suggest table templates
         if re.match(r'^\s*INSERT\s*$', query, re.IGNORECASE):
             for table, columns in self.table_schemas.items():
                 cols_str = ', '.join(columns)
@@ -2017,6 +2237,7 @@ class AIAssistant:
         """Get suggestions for UPDATE queries"""
         suggestions = []
 
+        # If it's just "UPDATE", suggest table templates
         if re.match(r'^\s*UPDATE\s+(\w+)\s+SET\s*$', query, re.IGNORECASE):
             table_match = re.search(r'UPDATE\s+(\w+)', query, re.IGNORECASE)
             if table_match:
@@ -2037,6 +2258,7 @@ class AIAssistant:
         """Get suggestions for DELETE queries"""
         suggestions = []
 
+        # Suggest WHERE clause for safety
         if 'WHERE' not in query.upper():
             suggestions.append({
                 'query': query + ' WHERE ',
@@ -2051,6 +2273,7 @@ class AIAssistant:
         suggestions = []
         query_upper = query.upper()
 
+        # Index suggestions
         if 'WHERE' in query_upper and 'LIKE' in query_upper:
             suggestions.append({
                 'type': 'index',
@@ -2058,6 +2281,7 @@ class AIAssistant:
                 'impact': 'high'
             })
 
+        # JOIN optimization
         if 'JOIN' in query_upper and 'WHERE' not in query_upper:
             suggestions.append({
                 'type': 'join_optimization',
@@ -2065,6 +2289,7 @@ class AIAssistant:
                 'impact': 'high'
             })
 
+        # Subquery optimization
         if complexity['has_subquery']:
             suggestions.append({
                 'type': 'subquery_optimization',
@@ -2072,6 +2297,7 @@ class AIAssistant:
                 'impact': 'medium'
             })
 
+        # DISTINCT optimization
         if 'DISTINCT' in query_upper and 'GROUP BY' not in query_upper:
             suggestions.append({
                 'type': 'distinct_optimization',
@@ -2079,6 +2305,7 @@ class AIAssistant:
                 'impact': 'medium'
             })
 
+        # LIMIT optimization
         if 'SELECT' in query_upper and 'LIMIT' not in query_upper and 'ORDER BY' in query_upper:
             suggestions.append({
                 'type': 'limit_optimization',
@@ -2093,6 +2320,7 @@ class AIAssistant:
         suggestions = []
         query_upper = query.upper()
 
+        # CTE suggestions
         if not complexity['has_cte'] and 'SELECT' in query_upper and len(query.split()) > 10:
             suggestions.append({
                 'query': f"WITH query_data AS ({query.strip()}) SELECT * FROM query_data",
@@ -2100,6 +2328,7 @@ class AIAssistant:
                 'type': 'cte_pattern'
             })
 
+        # Window function suggestions
         if 'GROUP BY' in query_upper and 'ORDER BY' in query_upper and not complexity['has_window_function']:
             suggestions.append({
                 'query': query + ' ROW_NUMBER() OVER (ORDER BY ...) as row_num',
@@ -2107,6 +2336,7 @@ class AIAssistant:
                 'type': 'window_function'
             })
 
+        # JOIN relationship suggestions
         table_match = re.search(r'FROM\s+(\w+)', query_upper, re.IGNORECASE)
         if table_match:
             table_name = table_match.group(1).lower()
@@ -2120,6 +2350,7 @@ class AIAssistant:
                             'type': 'relationship_join'
                         })
 
+        # Recursive CTE for hierarchical data
         if 'parent_id' in query.lower() or 'manager_id' in query.lower():
             suggestions.append({
                 'query': f"WITH RECURSIVE hierarchy AS (SELECT * FROM ({query.strip()}) WHERE parent_id IS NULL UNION ALL SELECT t.* FROM ({query.strip()}) t JOIN hierarchy h ON t.parent_id = h.id) SELECT * FROM hierarchy",
@@ -2142,6 +2373,7 @@ class AIAssistant:
         try:
             natural_lower = natural_query.lower().strip()
 
+            # Pattern matching for common query types
             result = {
                 'sql': '',
                 'confidence': 0.0,
@@ -2149,14 +2381,19 @@ class AIAssistant:
                 'alternatives': []
             }
 
+            # SELECT queries
             if any(word in natural_lower for word in ['show', 'get', 'find', 'list', 'display', 'select']):
                 result = self._nl_to_select_query(natural_query)
+            # INSERT queries
             elif any(word in natural_lower for word in ['add', 'insert', 'create', 'new']):
                 result = self._nl_to_insert_query(natural_query)
+            # UPDATE queries
             elif any(word in natural_lower for word in ['update', 'change', 'modify', 'set']):
                 result = self._nl_to_update_query(natural_query)
+            # DELETE queries
             elif any(word in natural_lower for word in ['delete', 'remove', 'erase']):
                 result = self._nl_to_delete_query(natural_query)
+            # JOIN queries
             elif any(word in natural_lower for word in ['join', 'combine', 'with related']):
                 result = self._nl_to_join_query(natural_query)
             else:
@@ -2185,6 +2422,7 @@ class AIAssistant:
 
         natural_lower = natural_query.lower()
 
+        # Extract table name
         table_name = None
         for table in self.table_schemas.keys():
             if table in natural_lower:
@@ -2196,20 +2434,26 @@ class AIAssistant:
             result['confidence'] = 0.3
             return result
 
+        # Extract columns
         columns = []
         for col in self.table_schemas[table_name]:
             if col in natural_lower or col.replace('_', ' ') in natural_lower:
                 columns.append(col)
 
+        # If no specific columns mentioned, select all
         if not columns:
             columns = ['*']
 
+        # Build basic SELECT
         sql = f"SELECT {', '.join(columns)} FROM {table_name}"
 
+        # Add WHERE conditions
         where_conditions = []
         if 'where' in natural_lower or 'with' in natural_lower or 'having' in natural_lower:
+            # Simple pattern matching for conditions
             for col in self.table_schemas[table_name]:
                 if col in natural_lower:
+                    # Look for values after column names
                     col_pattern = r"{}\s+(?:is|=|equals?)\s*['\"]?([^'\"\s]+)['\"]?".format(col)
                     match = re.search(col_pattern, natural_lower, re.IGNORECASE)
                     if match:
@@ -2219,6 +2463,7 @@ class AIAssistant:
         if where_conditions:
             sql += f" WHERE {' AND '.join(where_conditions)}"
 
+        # Add ORDER BY
         if 'order' in natural_lower and 'by' in natural_lower:
             for col in self.table_schemas[table_name]:
                 if col in natural_lower:
@@ -2227,6 +2472,7 @@ class AIAssistant:
                         sql += " DESC"
                     break
 
+        # Add LIMIT
         if 'limit' in natural_lower or 'top' in natural_lower:
             limit_match = re.search(r'(?:limit|top)\s+(\d+)', natural_lower)
             if limit_match:
@@ -2252,6 +2498,7 @@ class AIAssistant:
 
         natural_lower = natural_query.lower()
 
+        # Extract table name
         table_name = None
         for table in self.table_schemas.keys():
             if table in natural_lower:
@@ -2263,6 +2510,7 @@ class AIAssistant:
             result['confidence'] = 0.3
             return result
 
+        # Build INSERT template
         columns = self.table_schemas[table_name]
         placeholders = ', '.join(['?' for _ in columns])
 
@@ -2287,6 +2535,7 @@ class AIAssistant:
 
         natural_lower = natural_query.lower()
 
+        # Extract table name
         table_name = None
         for table in self.table_schemas.keys():
             if table in natural_lower:
@@ -2298,6 +2547,7 @@ class AIAssistant:
             result['confidence'] = 0.3
             return result
 
+        # Build UPDATE template
         sql = f"UPDATE {table_name} SET "
 
         result['sql'] = sql + "column_name = value WHERE condition"
@@ -2317,6 +2567,7 @@ class AIAssistant:
 
         natural_lower = natural_query.lower()
 
+        # Extract table name
         table_name = None
         for table in self.table_schemas.keys():
             if table in natural_lower:
@@ -2328,6 +2579,7 @@ class AIAssistant:
             result['confidence'] = 0.3
             return result
 
+        # Build DELETE template
         sql = f"DELETE FROM {table_name} WHERE condition"
 
         result['sql'] = sql
@@ -2347,6 +2599,7 @@ class AIAssistant:
 
         natural_lower = natural_query.lower()
 
+        # Find related tables
         found_tables = []
         for table in self.table_schemas.keys():
             if table in natural_lower:
@@ -2357,9 +2610,11 @@ class AIAssistant:
             result['confidence'] = 0.2
             return result
 
+        # Try to find relationship
         table1, table2 = found_tables[0], found_tables[1]
         join_condition = ""
 
+        # Check predefined relationships
         if table1 in self.table_relationships and table2 in self.table_relationships[table1]:
             relation = self.table_relationships[table1][table2]
             join_condition = f"{table1}.{relation['foreign_key']} = {table2}.{relation['primary_key']}"
@@ -2405,6 +2660,7 @@ class AIAssistant:
         """Explain a SELECT query"""
         explanation = "This query selects data from the database."
 
+        # Check for specific patterns
         if 'COUNT(' in query.upper():
             explanation = "This query counts records in the database."
         elif 'SUM(' in query.upper():
@@ -2412,14 +2668,17 @@ class AIAssistant:
         elif 'AVG(' in query.upper():
             explanation = "This query calculates the average of numeric values."
 
+        # Add table information
         table_match = re.search(r'FROM\s+(\w+)', query, re.IGNORECASE)
         if table_match:
             table = table_match.group(1)
             explanation += f" It retrieves data from the '{table}' table."
 
+        # Add WHERE information
         if 'WHERE' in query.upper():
             explanation += " Results are filtered by specified conditions."
 
+        # Add LIMIT information
         limit_match = re.search(r'LIMIT\s+(\d+)', query, re.IGNORECASE)
         if limit_match:
             limit = limit_match.group(1)
@@ -2467,11 +2726,13 @@ class AIAssistant:
         """Explain a CTE (Common Table Expression) query"""
         explanation = "This query uses a Common Table Expression (CTE) with the WITH clause."
 
+        # Extract CTE name
         cte_match = re.search(r'WITH\s+(\w+)\s+AS', query, re.IGNORECASE)
         if cte_match:
             cte_name = cte_match.group(1)
             explanation += f" It defines a temporary result set called '{cte_name}'."
 
+        # Check for recursion
         if 'RECURSIVE' in query.upper():
             explanation += " This is a recursive CTE, useful for hierarchical or tree-structured data."
 
@@ -2482,7 +2743,10 @@ class AIAssistant:
     def _parse_join_query(self, query: str) -> Dict[str, Any]:
         """Parse a JOIN query to extract table information"""
         try:
+            # Simple JOIN query parser for basic INNER JOINs
+            # Pattern: SELECT ... FROM table1 alias1 JOIN table2 alias2 ON condition
 
+            # Extract FROM clause
             from_match = re.search(r'FROM\s+([^\s]+)(?:\s+(\w+))?', query, re.IGNORECASE)
             if not from_match:
                 return None
@@ -2490,6 +2754,7 @@ class AIAssistant:
             from_table = from_match.group(1)
             from_alias = from_match.group(2) if from_match.group(2) else from_table
 
+            # Extract JOIN clause
             join_match = re.search(r'JOIN\s+([^\s]+)(?:\s+(\w+))?\s+ON\s+(.+?)(?:\s+WHERE|$|\s+ORDER|\s+GROUP|\s+LIMIT|$)', query, re.IGNORECASE | re.DOTALL)
             if not join_match:
                 return None
@@ -2498,14 +2763,17 @@ class AIAssistant:
             join_alias = join_match.group(2) if join_match.group(2) else join_table
             join_condition = join_match.group(3).strip()
 
+            # Extract SELECT clause
             select_match = re.search(r'SELECT\s+(.+?)\s+FROM', query, re.IGNORECASE | re.DOTALL)
             select_clause = select_match.group(1) if select_match else "*"
 
+            # Create mapping of aliases to actual table names
             table_aliases = {
                 from_alias: from_table,
                 join_alias: join_table
             }
 
+            # Return list of actual table names for metadata
             actual_tables = [from_table, join_table]
 
             return {
@@ -2527,33 +2795,43 @@ class AIAssistant:
     def _build_translated_join_query(self, original_query: str, join_info: Dict[str, Any]) -> str:
         """Build a translated JOIN query for encrypted columns"""
         try:
+            # Parse the SELECT clause to identify columns from each table
             select_clause = join_info['select_clause']
             table_aliases = join_info.get('table_aliases', {})  # Dict mapping aliases to table names
             tables = join_info.get('tables', [])  # List of actual table names
 
+            # Parse column references in SELECT clause
             translated_select_parts = []
             select_items = [item.strip() for item in select_clause.split(',')]
 
             for item in select_items:
                 item = item.strip()
 
+                # Handle qualified column names (table.column or alias.column)
                 if '.' in item:
                     table_ref, column = item.split('.', 1)
                     table_ref = table_ref.strip()
                     column = column.strip()
 
+                    # Map table reference to actual table name using the aliases dict
                     actual_table = table_aliases.get(table_ref, table_ref)
 
+                    # Check if this table has a mapping
                     if actual_table in self.table_mappings:
                         table_mapping = self.table_mappings[actual_table]
+                        # For JOIN queries, we don't translate column names since they need to work with the actual schema
+                        # The encryption/decryption happens at the result level
                         translated_select_parts.append(item)
                     else:
                         translated_select_parts.append(item)
                 else:
+                    # Unqualified column - this is ambiguous in JOINs, keep as-is
                     translated_select_parts.append(item)
 
+            # Build the translated SELECT clause
             translated_select = ', '.join(translated_select_parts)
 
+            # Build the FROM clause with aliases
             from_table = join_info['from_table']
             from_alias = join_info['from_alias']
             join_table = join_info['join_table']
@@ -2569,8 +2847,11 @@ class AIAssistant:
                 join_clause += f" {join_alias}"
             join_clause += f" ON {join_condition}"
 
+            # Reconstruct the query
             translated_query = f"SELECT {translated_select} {from_clause} {join_clause}"
 
+            # Add WHERE, ORDER BY, etc. if present in original query
+            # For now, keep the rest of the query as-is since JOIN translation is complex
 
             return translated_query
 
@@ -2591,19 +2872,25 @@ class AIAssistant:
             char = values_str[i]
 
             if not in_string and not paren_depth and char == ',':
+                # Comma separator - end of current value
                 values.append(current_value.strip())
                 current_value = ""
+                # Skip whitespace after comma
                 while i + 1 < len(values_str) and values_str[i + 1].isspace():
                     i += 1
             elif not in_string and (char == '"' or char == "'"):
+                # Start of string
                 in_string = True
                 string_char = char
                 current_value += char
             elif in_string and char == string_char:
+                # End of string (check for escaped quotes)
                 if i + 1 < len(values_str) and values_str[i + 1] == string_char:
+                    # Escaped quote
                     current_value += char + char
                     i += 1  # Skip next character
                 else:
+                    # End of string
                     in_string = False
                     current_value += char
             elif not in_string and char == '(':
@@ -2617,10 +2904,12 @@ class AIAssistant:
 
             i += 1
 
+        # Add the last value if it exists
         if current_value.strip():
             values.append(current_value.strip())
 
         return values
 
 
+# Global AI assistant instance
 ai_assistant = AIAssistant()

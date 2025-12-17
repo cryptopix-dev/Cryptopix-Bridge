@@ -23,6 +23,7 @@ class VDSManager:
 
     def __init__(self):
         """Initialize the VDS manager"""
+        # Key: (host, port) tuple, Value: VDSInstance
         self.vds_instances: Dict[Tuple[str, int], VDSInstance] = {}
         self.lock = threading.Lock()
         logger.info("VDS Manager initialized with (host, port) keying")
@@ -65,20 +66,24 @@ class VDSManager:
         """
         with self.lock:
             try:
+                # Check if (host, port) combination is already in use
                 instance_key = (host, port)
                 if instance_key in self.vds_instances:
                     logger.error(f"VDS instance already exists for {host}:{port}")
                     return None
 
+                # Get database information
                 database = database_registry.get_database(db_id)
                 if not database:
                     logger.error(f"Database {db_id} not found")
                     return None
 
+                # Check if port is already in use by registry
                 if database_registry.is_port_in_use(port):
                     logger.error(f"Port {port} is already in use")
                     return None
 
+                # Add VDS instance to database registry
                 vds_instance = database_registry.add_vds_instance(
                     db_id=db_id,
                     host=host,
@@ -111,12 +116,14 @@ class VDSManager:
         """
         with self.lock:
             try:
+                # Get VDS instance info from registry
                 vds_info = database_registry.get_vds_instance(db_id, vds_id)
                 if not vds_info:
                     logger.error(
                         f"VDS instance {vds_id} not found in database {db_id}")
                     return False, "VDS instance not found"
 
+                # Check if already running (memory check using (host, port) key)
                 instance_key = (vds_info["host"], vds_info["port"])
                 if instance_key in self.vds_instances:
                     if self.vds_instances[instance_key].running:
@@ -124,14 +131,17 @@ class VDSManager:
                             f"VDS instance {vds_id} is already running on {vds_info['host']}:{vds_info['port']}")
                         return True, "VDS is already running"
 
+                # Check if port is in use
                 if database_registry.is_port_in_use(vds_info["port"], exclude_vds_id=vds_id):
                     return False, f"Port {vds_info['port']} is already configured for another VDS instance"
 
+                # Get database information
                 database = database_registry.get_database(db_id)
                 if not database:
                     logger.error(f"Database {db_id} not found")
                     return False, "Database definition not found"
 
+                # Load table mappings and migration state from schema folder
                 schema_folder = Path(database["schema_folder"])
                 mappings_file = schema_folder / "mappings.json"
                 migration_state_file = schema_folder / "migration_state.json"
@@ -151,6 +161,8 @@ class VDSManager:
                     with open(migration_state_file, 'r') as f:
                         migration_state = json.load(f)
 
+                # Create VDSInstance with dedicated per-instance resources
+                # Each instance owns its own socket, console_service, threads, DB connection, and running flag
                 vds = VDSInstance(
                     host=vds_info["host"],
                     port=vds_info["port"],
@@ -163,8 +175,10 @@ class VDSManager:
 
                 vds.start()
 
+                # Store VDS instance keyed by (host, port) tuple
                 self.vds_instances[instance_key] = vds
 
+                # Update status in registry
                 database_registry.update_vds_status(db_id, vds_id, "running")
 
                 logger.info(
@@ -174,6 +188,7 @@ class VDSManager:
 
             except Exception as e:
                 logger.error(f"Failed to start VDS instance: {e}")
+                # Update status to error
                 database_registry.update_vds_status(db_id, vds_id, "error")
                 return False, str(e)
 
@@ -190,6 +205,7 @@ class VDSManager:
         """
         with self.lock:
             try:
+                # Get VDS instance info to find the (host, port) key
                 vds_info = database_registry.get_vds_instance(db_id, vds_id)
                 if not vds_info:
                     logger.warning(f"VDS instance {vds_id} not found in registry")
@@ -199,15 +215,19 @@ class VDSManager:
 
                 if instance_key not in self.vds_instances:
                     logger.warning(f"VDS instance {vds_id} is not running (no instance found for {instance_key})")
+                    # Update status anyway
                     database_registry.update_vds_status(
                         db_id, vds_id, "stopped")
                     return True
 
+                # Stop VDS instance with timeout
                 vds = self.vds_instances[instance_key]
                 vds.stop(timeout=5.0)  # Use timeout for proper shutdown
 
+                # Remove from active instances
                 del self.vds_instances[instance_key]
 
+                # Update status in registry
                 database_registry.update_vds_status(db_id, vds_id, "stopped")
 
                 logger.info(
@@ -245,6 +265,7 @@ class VDSManager:
         Returns:
             True if running, False otherwise
         """
+        # Get VDS instance info to find the (host, port) key
         vds_info = database_registry.get_vds_instance(db_id, vds_id)
         if not vds_info:
             return False
@@ -267,7 +288,10 @@ class VDSManager:
 
             for instance_key in instance_keys:
                 try:
+                    # Find the VDS instance in registry by host/port
                     host, port = instance_key
+                    # We need to find the db_id and vds_id for this instance
+                    # This is a bit complex, so we'll iterate through all databases
                     found = False
                     for db in database_registry.list_databases():
                         for vds in db.get("vds_instances", []):
@@ -297,6 +321,7 @@ class VDSManager:
             for instance_key, vds in self.vds_instances.items():
                 if vds.running:
                     host, port = instance_key
+                    # Find the corresponding registry entry
                     db_id = None
                     vds_id = None
                     for db in database_registry.list_databases():
@@ -377,15 +402,18 @@ class VDSManager:
             True if successful, False otherwise
         """
         try:
+            # Stop VDS if running
             if self.is_vds_running(db_id, vds_id):
                 self.stop_vds(db_id, vds_id)
 
+            # Get instance info to remove from our instances dict
             vds_info = database_registry.get_vds_instance(db_id, vds_id)
             if vds_info:
                 instance_key = (vds_info["host"], vds_info["port"])
                 if instance_key in self.vds_instances:
                     del self.vds_instances[instance_key]
 
+            # Remove from registry
             return database_registry.remove_vds_instance(db_id, vds_id)
 
         except Exception as e:
@@ -393,4 +421,5 @@ class VDSManager:
             return False
 
 
+# Global VDS manager instance
 vds_manager = VDSManager()
