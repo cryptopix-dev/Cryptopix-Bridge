@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Table Selection - CryptopixBridge</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="brand">
+                <h1>CryptopixBridge</h1>
+            </div>
+            <div class="nav-links">
+                <a href="{{ url_for('index') }}" class="nav-link">
+                    <i class="bi bi-house"></i>Dashboard
+                </a>
+                <a href="{{ url_for('migration_setup') }}" class="nav-link active">
+                    <i class="bi bi-arrow-left-right"></i>Migration
+                </a>
+                <a href="{{ url_for('query_console_page') }}" class="nav-link">
+                    <i class="bi bi-terminal"></i>Query Console
+                </a>
+                <a href="{{ url_for('systemlog') }}" class="nav-link">
+                    <i class="bi bi-journal-text"></i>System Logs
+                </a>
+                <a href="{{ url_for('settings_page') }}" class="nav-link">
+                    <i class="bi bi-gear"></i>Settings
+                </a>
+            </div>
+            <div class="user-section">
+                <div class="user-dropdown">
+                    <button class="user-dropdown-toggle" onclick="toggleDropdown()">
+                        <i class="bi bi-person-circle"></i>
+                        {{ session.get('user_email', 'User') }}
+                        <i class="bi bi-chevron-down"></i>
+                    </button>
+                    <div class="user-dropdown-menu" id="userDropdown">
+                        <div class="dropdown-item">
+                            <span>License Key:</span>
+                            <div>
+                                <span class="license-key" id="licenseKey">{{ session.get('license_key', 'N/A') }}</span>
+                                <button class="copy-btn" onclick="copyLicenseKey()" title="Copy License Key">
+                                    <i class="bi bi-clipboard"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <a href="{{ url_for('logout') }}" class="logout-btn">
+                    <i class="bi bi-box-arrow-right"></i>Logout
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <div class="main-container">
+        <div class="detail-card">
+            <div class="card-header">
+                <h5><i class="bi bi-table me-2"></i>Select Tables to Migrate</h5>
+            </div>
+            <div class="card-body">
+                <div class="alert">
+                    <i class="bi bi-info-circle"></i>
+                    Select the tables you want to migrate from your source database to the encrypted database.
+                </div>
+
+                <form method="POST" action="{{ url_for('select_tables') }}" id="tableForm">
+                    <div class="select-all">
+                        <label>
+                            <input type="checkbox" id="selectAll"> Select All Tables
+                        </label>
+                    </div>
+
+                    <div class="table-grid">
+                        {% for table in tables %}
+                        <div class="table-card" onclick="toggleTable('{{ table }}')">
+                            <div class="table-name">{{ table }}</div>
+                            <div class="table-info">Table to be encrypted</div>
+                            <input type="checkbox" name="tables" value="{{ table }}" class="checkbox-container" id="table_{{ table }}">
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="button-group">
+                        <button type="submit" class="btn btn-primary" id="continueBtn" disabled>
+                            <i class="bi bi-arrow-right-circle"></i>Continue to Column Configuration
+                        </button>
+                        <a href="{{ url_for('migration_setup') }}" class="btn btn-outline-secondary">
+                            <i class="bi bi-arrow-left"></i>Back
+                        </a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        function toggleDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        function copyLicenseKey() {
+            const licenseKey = document.getElementById('licenseKey').textContent;
+            navigator.clipboard.writeText(licenseKey).then(function() {
+                showToast('License key copied to clipboard!', 'success');
+            }).catch(function(err) {
+                showToast('Failed to copy license key', 'error');
+            });
+        }
+
+        function toggleTable(tableName) {
+            const checkbox = document.getElementById(`table_${tableName}`);
+            const card = checkbox.closest('.table-card');
+
+            checkbox.checked = !checkbox.checked;
+            card.classList.toggle('selected');
+
+            updateContinueButton();
+        }
+
+        function updateContinueButton() {
+            const checkedBoxes = document.querySelectorAll('input[name="tables"]:checked');
+            document.getElementById('continueBtn').disabled = checkedBoxes.length === 0;
+        }
+
+        function showToast(message, type = 'info') {
+            const toastContainer = document.getElementById('toastContainer');
+            if (!toastContainer) return;
+
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.setAttribute('role', 'alert');
+            toast.setAttribute('aria-live', 'assertive');
+            toast.setAttribute('aria-atomic', 'true');
+            toast.innerHTML = `
+                <div class="toast-body">
+                    <strong>${type.charAt(0).toUpperCase() + type.slice(1)}:</strong> ${message}
+                </div>
+            `;
+
+            toastContainer.appendChild(toast);
+
+            // Initialize Bootstrap toast with 8-second delay
+            const bsToast = new bootstrap.Toast(toast, {
+                autohide: true,
+                delay: 8000
+            });
+            bsToast.show();
+
+            // Remove from DOM after hiding
+            toast.addEventListener('hidden.bs.toast', () => {
+                toast.remove();
+            });
+        }
+
+        document.getElementById('selectAll').addEventListener('change', function() {
+            const checkboxes = document.querySelectorAll('input[name="tables"]');
+            const cards = document.querySelectorAll('.table-card');
+
+            checkboxes.forEach((checkbox, index) => {
+                checkbox.checked = this.checked;
+                if (this.checked) {
+                    cards[index].classList.add('selected');
+                } else {
+                    cards[index].classList.remove('selected');
+                }
+            });
+
+            updateContinueButton();
+        });
+
+        document.querySelectorAll('input[name="tables"]').forEach(checkbox => {
+            checkbox.addEventListener('change', updateContinueButton);
+        });
+
+        document.addEventListener('click', function(event) {
+            const dropdown = document.getElementById('userDropdown');
+            const toggle = event.target.closest('.user-dropdown-toggle');
+
+            if (!toggle && dropdown.classList.contains('show')) {
+                dropdown.classList.remove('show');
+            }
+        });
+    </script>
+</body>
+</html>

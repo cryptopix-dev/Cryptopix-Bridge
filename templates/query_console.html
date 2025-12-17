@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Query Console - CryptopixBridge</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+   
+</head>
+
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="brand">
+                <h1>CryptopixBridge</h1>
+            </div>
+            <div class="nav-links">
+                <a href="{{ url_for('index') }}" class="nav-link">
+                    <i class="bi bi-house"></i>Dashboard
+                </a>
+                <a href="{{ url_for('migration_setup') }}" class="nav-link">
+                    <i class="bi bi-arrow-left-right"></i>Migration
+                </a>
+                <a href="{{ url_for('query_console_page') }}" class="nav-link active">
+                    <i class="bi bi-terminal"></i>Query Console
+                </a>
+                <a href="{{ url_for('systemlog') }}" class="nav-link">
+                    <i class="bi bi-journal-text"></i>System Logs
+                </a>
+                <a href="{{ url_for('settings_page') }}" class="nav-link">
+                    <i class="bi bi-gear"></i>Settings
+                </a>
+            </div>
+            <div class="user-section">
+                <div class="user-dropdown">
+                    <button class="user-dropdown-toggle" onclick="toggleDropdown()">
+                        <i class="bi bi-person-circle"></i>
+                        {{ session.get('user_email', 'User') }}
+                        <i class="bi bi-chevron-down"></i>
+                    </button>
+                    <div class="user-dropdown-menu" id="userDropdown">
+                        <div class="dropdown-item">
+                            <span>License Key:</span>
+                            <div>
+                                <span class="license-key" id="licenseKey">{{ session.get('license_key', 'N/A') }}</span>
+                                <button class="copy-btn" onclick="copyLicenseKey()" title="Copy License Key">
+                                    <i class="bi bi-clipboard"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <a href="{{ url_for('logout') }}" class="logout-btn">
+                    <i class="bi bi-box-arrow-right"></i>Logout
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Toast container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <div class="main-container">
+        <!-- Database Status -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="detail-card">
+                    <div class="card-header">
+                        <h5><i class="bi bi-database me-2"></i>Database Status</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="db-status">
+                            <span class="status-indicator status-disconnected"></span>
+                            <span id="db-status-text">Checking connection...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Database Selector -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="detail-card">
+                    <div class="card-header">
+                        <h5><i class="bi bi-database-gear me-2"></i>Select Database</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label for="databaseSelector" class="form-label">
+                                <strong>Choose which database to query:</strong>
+                            </label>
+                            <select class="form-control" id="databaseSelector" onchange="onDatabaseChange()">
+                                <option value="">-- Select a database --</option>
+                                {% if databases %}
+                                {% for db in databases %}
+                                <option value="{{ db.id }}" {% if request.args.get('db_id')==db.id %}selected{% endif
+                                    %}>{{ db.name }} ({{ 'Encrypted' if db.migration_complete else 'Encryption in progress' }})
+                                </option>
+                                {% endfor %}
+                                {% else %}
+                                <option value="" disabled>No databases available</option>
+                                {% endif %}
+                            </select>
+                            <small class="text-muted">Select a database to execute queries against</small>
+                        </div>
+                        <div id="selectedDatabaseInfo" style="display: none;">
+                            <p class="mb-0"><strong>Selected:</strong> <span id="selectedDbName"></span></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Query Console -->
+        <div class="row">
+            <div class="col-12">
+                <div class="detail-card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5><i class="bi bi-terminal me-2"></i>Query Console</h5>
+                        <button class="btn btn-outline-secondary btn-sm" id="toggle-history" onclick="toggleHistory()">
+                            <i class="bi bi-clock-history me-1"></i>History
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="console-container">
+                            <!-- Command History Panel -->
+                            <div class="history-panel" id="history-panel">
+                                <h6 class="history-title"><i class="bi bi-clock-history me-2"></i>Query History</h6>
+                                <div class="command-history" id="command-history">
+                                    <!-- History items will be added here -->
+                                </div>
+                            </div>
+
+                            <!-- Main Console Area -->
+                            <div class="console-main">
+                                <!-- Console Output -->
+                                <div class="console-output" id="console-output">
+                                </div>
+
+                                <!-- Console Input -->
+                                <div class="console-input-group">
+                                    <div class="console-prompt">></div>
+                                    <input type="text" class="console-input" id="console-input" placeholder="Enter SQL query..."
+                                        autocomplete="off">
+                                    <button class="btn btn-primary" id="execute-btn">
+                                        <i class="bi bi-play me-1"></i>Execute
+                                    </button>
+                                    <button class="btn btn-outline-secondary" id="clear-btn">
+                                        <i class="bi bi-trash me-1"></i>Clear
+                                    </button>
+                                    <button class="btn btn-outline-secondary" id="nl-toggle" onclick="toggleNL()">
+                                        <i class="bi bi-chat-text me-1"></i>Natural Language
+                                    </button>
+                                </div>
+
+                                <!-- Natural Language Input Section -->
+                                <div class="natural-language-section" id="nl-section">
+                                    <h6><i class="bi bi-chat-text me-2"></i>Describe your query in plain English</h6>
+                                    <textarea class="nl-input" id="nl-input" rows="3"
+                                        placeholder="e.g., Show me all employees in the Engineering department with salary greater than 50000"></textarea>
+                                    <button class="btn btn-primary" id="nl-convert-btn">
+                                        <i class="bi bi-magic me-1"></i>Convert to SQL
+                                    </button>
+                                    <div class="nl-result" id="nl-result" style="display: none;"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        let commandHistory = [];
+        let selectedDatabaseId = null;
+        const maxHistoryItems = 50;
+        let nlEnabled = false;
+
+        // DOM elements
+        const consoleInput = document.getElementById('console-input');
+        const executeBtn = document.getElementById('execute-btn');
+        const clearBtn = document.getElementById('clear-btn');
+        const consoleOutput = document.getElementById('console-output');
+        const commandHistoryDiv = document.getElementById('command-history');
+
+        const nlSection = document.getElementById('nl-section');
+        const nlInput = document.getElementById('nl-input');
+        const nlConvertBtn = document.getElementById('nl-convert-btn');
+        const nlResult = document.getElementById('nl-result');
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function () {
+            // Check if database is already selected (from URL or restored state)
+            const selector = document.getElementById('databaseSelector');
+            if (selector.value) {
+                onDatabaseChange();
+                checkDatabaseStatus();
+            }
+            consoleInput.focus();
+
+            // Event listeners
+            consoleInput.addEventListener('keypress', handleKeyPress);
+            consoleInput.addEventListener('input', function () {
+                executeBtn.disabled = !consoleInput.value.trim();
+            });
+            nlConvertBtn.addEventListener('click', convertNaturalLanguage);
+            nlInput.addEventListener('keypress', handleNLKeyPress);
+            executeBtn.addEventListener('click', executeCommand);
+            clearBtn.addEventListener('click', clearConsole);
+        });
+
+        function toggleNL() {
+            nlEnabled = !nlEnabled;
+            const toggleBtn = document.getElementById('nl-toggle');
+            toggleBtn.innerHTML = nlEnabled ?
+                '<i class="bi bi-chat-text me-1"></i>Natural Language: ON' :
+                '<i class="bi bi-chat-text me-1"></i>Natural Language';
+            toggleBtn.classList.toggle('btn-primary', nlEnabled);
+            toggleBtn.classList.toggle('btn-outline-secondary', !nlEnabled);
+
+            nlSection.style.display = nlEnabled ? 'block' : 'none';
+
+            if (nlEnabled) {
+                nlInput.focus();
+            }
+        }
+
+        function toggleHistory() {
+            const historyPanel = document.getElementById('history-panel');
+            const toggleBtn = document.getElementById('toggle-history');
+            const isVisible = historyPanel.style.display !== 'none';
+
+            if (isVisible) {
+                historyPanel.style.display = 'none';
+                toggleBtn.innerHTML = '<i class="bi bi-clock-history me-1"></i>Show History';
+            } else {
+                historyPanel.style.display = 'block';
+                toggleBtn.innerHTML = '<i class="bi bi-clock-history me-1"></i>Hide History';
+            }
+        }
+
+        function convertNaturalLanguage() {
+            const naturalQuery = nlInput.value.trim();
+            if (!naturalQuery) return;
+
+            // Show loading
+            nlConvertBtn.disabled = true;
+            nlConvertBtn.innerHTML = '<span class="loading me-1"></span>Converting...';
+
+            // Convert natural language to SQL
+            fetch('/api/console/natural_language', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    query: naturalQuery,
+                    db_id: selectedDatabaseId
+                })
+            })
+                .then(response => response.json())
+                .then(data => {
+                    nlConvertBtn.disabled = false;
+                    nlConvertBtn.innerHTML = '<i class="bi bi-magic me-1"></i>Convert to SQL';
+
+                    if (data.success && data.result) {
+                        const result = data.result;
+                        let resultHtml = `<div class="nl-confidence">Confidence: ${(result.confidence * 100).toFixed(1)}%</div>`;
+                        resultHtml += `<div><strong>Generated SQL:</strong></div>`;
+                        resultHtml += `<pre>${result.sql}</pre>`;
+
+                        if (result.explanation) {
+                            resultHtml += `<div><strong>Explanation:</strong> ${result.explanation}</div>`;
+                        }
+
+                        if (result.alternatives && result.alternatives.length > 0) {
+                            resultHtml += `<div><strong>Alternatives:</strong></div>`;
+                            result.alternatives.forEach(alt => {
+                                resultHtml += `<div class="text-muted small">• ${alt}</div>`;
+                            });
+                        }
+
+                        // Add button to use this SQL
+                        resultHtml += `<button class="btn btn-sm btn-primary mt-2" onclick="useGeneratedSQL('${result.sql.replace(/'/g, "\\'")}')">Use This SQL</button>`;
+
+                        nlResult.innerHTML = resultHtml;
+                        nlResult.style.display = 'block';
+                    } else {
+                        nlResult.innerHTML = `<div class="text-danger">Error: ${data.error || 'Failed to convert natural language to SQL'}</div>`;
+                        nlResult.style.display = 'block';
+                    }
+                })
+                .catch(error => {
+                    nlConvertBtn.disabled = false;
+                    nlConvertBtn.innerHTML = '<i class="bi bi-magic me-1"></i>Convert to SQL';
+                    nlResult.innerHTML = `<div class="text-danger">Network error: ${error.message}</div>`;
+                    nlResult.style.display = 'block';
+                });
+        }
+
+        function useGeneratedSQL(sql) {
+            consoleInput.value = sql;
+            nlResult.style.display = 'none';
+            consoleInput.focus();
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                executeCommand();
+            }
+        }
+
+        function handleNLKeyPress(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                convertNaturalLanguage();
+            }
+        }
+
+        function executeCommand() {
+            const command = consoleInput.value.trim();
+            if (!command) return;
+
+            console.log('executeCommand called with command:', command);
+            console.log('selectedDatabaseId:', selectedDatabaseId);
+
+            // Add to history
+            addToHistory(command);
+
+            // Show loading
+            showLoading();
+
+            const requestData = {
+                command: command,
+                db_id: selectedDatabaseId
+            };
+            console.log('Sending request data:', requestData);
+
+            // Execute command
+            fetch('/api/console/execute', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(requestData)
+            })
+                .then(response => {
+                    console.log('Response received:', response);
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('Response data:', data);
+                    console.log('Received response:', data);
+                    hideLoading();
+                    displayResult(data, command);
+                    consoleInput.value = '';
+                    consoleInput.focus();
+                })
+                .catch(error => {
+                    console.error('Network error:', error);
+                    hideLoading();
+                    displayError('Network error: ' + error.message);
+                    consoleInput.focus();
+                });
+        }
+
+        function displayResult(result, originalCommand) {
+            console.log('displayResult called');
+            console.log('Processing result:', result);
+            console.log('displayResult called with:', result);
+            let output = '';
+
+            if (result.success) {
+                console.log('Result is successful');
+                // Show success toast
+                let successMessage = 'Command executed successfully';
+                if (result.query_type === 'SELECT') {
+                    console.log('Query type is SELECT');
+                    console.log('Rows:', result.rows);
+                    console.log('Row count:', result.row_count);
+                    console.log('Columns:', result.columns);
+                    if (result.rows && result.rows.length > 0) {
+                        successMessage = `Query executed successfully (${result.row_count} rows)`;
+                        output += formatTable(result.rows, result.columns);
+                    } else {
+                        successMessage = `Query executed successfully (No results found)`;
+                        output += '<div class="text-info">No results found</div>\n';
+                    }
+                }
+                // Handle other SQL operations (INSERT, UPDATE, DELETE)
+                else if (result.query_type && result.query_type !== 'SELECT') {
+                    successMessage = `${result.query_type} operation completed successfully`;
+                    if (result.affected_rows !== undefined) {
+                        successMessage += ` (${result.affected_rows} rows affected)`;
+                    }
+                    if (result.message) {
+                        output += `<div class="text-info">${result.message}</div>\n`;
+                    }
+                }
+                // Handle admin commands
+                else if (result.admin_command) {
+                    successMessage = 'Admin command executed successfully';
+                    if (result.message) {
+                        output += `<div class="text-info">${result.message}</div>\n`;
+                    }
+                    if (result.admin_command === 'SHOW_STATS' && result.database_stats) {
+                        output += formatStats(result);
+                    }
+                    if (result.admin_command === 'SYSTEM_INFO' && result.system_info) {
+                        output += formatSystemInfo(result);
+                    }
+                }
+                // Handle other successful responses
+                else {
+                    if (result.message) {
+                        output += `<div class="text-info">${result.message}</div>\n`;
+                    }
+                }
+                showToast(successMessage, 'success');
+            } else {
+                // Show error toast and display in console
+                const errorMsg = result.error || 'Unknown error';
+                showToast(errorMsg, 'error');
+                output += `<div class="text-danger">Error: ${errorMsg}</div>\n`;
+            }
+
+            appendToOutput(output);
+            scrollToBottom();
+        }
+
+        function escapeHtml(text) {
+            if (text == null) return '';
+            return String(text)
+                .replace(/&/g, '&')
+                .replace(/</g, '<')
+                .replace(/>/g, '>')
+                .replace(/"/g, '"')
+                .replace(/'/g, '&#x27;');
+        }
+
+        function formatTable(rows, columns) {
+            if (!rows || !columns) return '';
+
+            let table = '<table class="result-table">\n';
+
+            // Header
+            table += '<thead><tr>\n';
+            columns.forEach(col => {
+                table += `<th>${col}</th>\n`;
+            });
+            table += '</tr></thead>\n';
+
+            // Body
+            table += '<tbody>\n';
+            rows.forEach(row => {
+                table += '<tr>\n';
+                columns.forEach(col => {
+                    const value = row[col] !== null && row[col] !== undefined ? row[col] : 'NULL';
+                    table += `<td>${escapeHtml(value)}</td>\n`;
+                });
+                table += '</tr>\n';
+            });
+            table += '</tbody></table>\n';
+
+            return table;
+        }
+
+        function formatStats(result) {
+            let output = '<div class="text-info fw-bold">System Statistics:</div>\n';
+
+            if (result.migration_status) {
+                output += `<div>Migration: ${result.migration_status.status} (${result.migration_status.progress}% complete)</div>\n`;
+            }
+
+            if (result.database_stats && result.database_stats.encrypted_db) {
+                const db = result.database_stats.encrypted_db;
+                output += `<div>Encrypted DB: ${db.connection_status}`;
+                if (db.total_rows !== undefined) {
+                    output += ` (${db.total_rows} rows, ${db.encrypted_columns} encrypted columns)`;
+                }
+                output += '</div>\n';
+            }
+
+            return output;
+        }
+
+        function formatSystemInfo(result) {
+            let output = '<div class="text-info fw-bold">System Information:</div>\n';
+
+            if (result.system_info) {
+                const sys = result.system_info;
+                output += `<div>Platform: ${sys.platform}</div>\n`;
+                output += `<div>Python: ${sys.python_version}</div>\n`;
+                output += `<div>Version: ${sys.version}</div>\n`;
+                output += `<div>Uptime: ${sys.uptime || 'N/A'}</div>\n`;
+            }
+
+            if (result.encryption_info) {
+                const enc = result.encryption_info;
+                output += `<div>CLWE: ${enc.clwe_enabled ? 'Enabled' : 'Disabled'}</div>\n`;
+                output += `<div>HMAC: ${enc.hmac_enabled ? 'Enabled' : 'Disabled'}</div>\n`;
+                output += `<div>Supported DBs: ${enc.supported_databases.join(', ')}</div>\n`;
+            }
+
+            return output;
+        }
+
+        function displayError(message) {
+            showToast(message, 'error');
+        }
+
+        function appendToOutput(content) {
+            consoleOutput.innerHTML += content;
+        }
+
+        function showLoading() {
+            executeBtn.disabled = true;
+            executeBtn.innerHTML = '<span class="loading me-1"></span>Executing...';
+        }
+
+        function hideLoading() {
+            executeBtn.disabled = false;
+            executeBtn.innerHTML = '<i class="bi bi-play me-1"></i>Execute';
+        }
+
+        function clearConsole() {
+            consoleOutput.innerHTML = '<div class="text-info">Console cleared. Ready for new commands.</div>';
+            consoleInput.focus();
+        }
+
+        function addToHistory(command) {
+            const timestamp = new Date().toLocaleTimeString();
+            commandHistory.unshift({ command, timestamp });
+
+            if (commandHistory.length > maxHistoryItems) {
+                commandHistory.pop();
+            }
+
+            updateHistoryDisplay();
+        }
+
+        function updateHistoryDisplay() {
+            commandHistoryDiv.innerHTML = '';
+            commandHistory.slice(0, 10).forEach(item => {
+                const historyItem = document.createElement('div');
+                historyItem.className = 'history-item';
+                historyItem.onclick = () => insertQuery(item.command);
+                historyItem.innerHTML = `
+                    <div>${item.command}</div>
+                    <div class="history-timestamp">${item.timestamp}</div>
+                `;
+                commandHistoryDiv.appendChild(historyItem);
+            });
+        }
+
+        function insertQuery(query) {
+            consoleInput.value = query;
+            consoleInput.focus();
+        }
+
+        function scrollToBottom() {
+            consoleOutput.scrollTop = consoleOutput.scrollHeight;
+        }
+
+        function checkDatabaseStatus() {
+            if (!selectedDatabaseId) {
+                const statusSpan = document.getElementById('connectionStatus') || document.getElementById('db-status-text');
+                const statusIndicator = document.querySelector('.status-indicator');
+                if (statusSpan) {
+                    statusSpan.textContent = 'No database selected';
+                    statusSpan.className = 'badge bg-secondary'; // Fallback
+                }
+                // Also handle text element
+                const textEl = document.getElementById('db-status-text');
+                if (textEl) textEl.textContent = 'No database selected';
+
+                if (statusIndicator) statusIndicator.className = 'status-indicator status-disconnected';
+                return;
+            }
+
+            const statusText = document.getElementById('db-status-text');
+            const statusIndicator = document.querySelector('.status-indicator');
+
+            if (statusText) statusText.textContent = 'Checking connection...';
+            if (statusIndicator) statusIndicator.className = 'status-indicator status-disconnected';
+
+            // Timeout after 5 seconds
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+            fetch('/api/console/execute', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    command: 'SELECT 1',
+                    db_id: selectedDatabaseId
+                }),
+                signal: controller.signal
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    clearTimeout(timeoutId);
+
+                    if (data.success) {
+                        if (statusIndicator) statusIndicator.className = 'status-indicator status-connected';
+                        if (statusText) statusText.textContent = 'Connected';
+                    } else {
+                        if (statusIndicator) statusIndicator.className = 'status-indicator status-disconnected';
+                        if (statusText) statusText.textContent = 'Connection Error: ' + (data.error || 'Unknown');
+                    }
+                })
+                .catch(error => {
+                    clearTimeout(timeoutId);
+                    console.error('Error checking status:', error);
+
+                    if (statusIndicator) statusIndicator.className = 'status-indicator status-disconnected';
+
+                    let msg = 'Connection Error';
+                    if (error.name === 'AbortError') {
+                        msg = 'Connection Timeout';
+                    }
+                    if (statusText) statusText.textContent = msg;
+                });
+        }
+
+        // Auto-refresh database status every 30 seconds
+        setInterval(checkDatabaseStatus, 30000);
+
+        function toggleDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        function copyLicenseKey() {
+            const licenseKey = document.getElementById('licenseKey').textContent;
+            navigator.clipboard.writeText(licenseKey).then(function () {
+                showToast('License key copied to clipboard', 'success');
+            }).catch(function (err) {
+                showToast('Failed to copy license key', 'error');
+            });
+        }
+
+        function showToast(message, type = 'info') {
+            const toastContainer = document.getElementById('toastContainer');
+            if (!toastContainer) return;
+
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.setAttribute('role', 'alert');
+            toast.setAttribute('aria-live', 'assertive');
+            toast.setAttribute('aria-atomic', 'true');
+            toast.innerHTML = `
+                <div class="toast-body">
+                    <strong>${type.charAt(0).toUpperCase() + type.slice(1)}:</strong> ${message}
+                </div>
+            `;
+
+            toastContainer.appendChild(toast);
+
+            // Initialize Bootstrap toast with 8-second delay
+            const bsToast = new bootstrap.Toast(toast, {
+                autohide: true,
+                delay: 8000
+            });
+            bsToast.show();
+
+            // Remove from DOM after hiding
+            toast.addEventListener('hidden.bs.toast', () => {
+                toast.remove();
+            });
+        }
+
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function (event) {
+            const dropdown = document.getElementById('userDropdown');
+            const toggle = event.target.closest('.user-dropdown-toggle');
+
+            if (!toggle && document.getElementById('userDropdown').classList.contains('show')) {
+                document.getElementById('userDropdown').classList.remove('show');
+            }
+        });
+
+        function onDatabaseChange() {
+            const selector = document.getElementById('databaseSelector');
+            selectedDatabaseId = selector.value;
+            checkDatabaseStatus();
+
+            if (selectedDatabaseId) {
+                const selectedOption = selector.options[selector.selectedIndex];
+                const dbName = selectedOption.text;
+
+                document.getElementById('selectedDbName').textContent = dbName;
+                document.getElementById('selectedDatabaseInfo').style.display = 'block';
+
+                console.log('Selected database:', selectedDatabaseId);
+                showToast('Database selected: ' + dbName, 'success');
+            } else {
+                document.getElementById('selectedDatabaseInfo').style.display = 'none';
+            }
+        }
+    </script>
+
+    <!-- Multi-Database Management JavaScript -->
+    <script src="{{ url_for('static', filename='js/multi_database.js') }}"></script>
+
+
+</body>
+
+</html>

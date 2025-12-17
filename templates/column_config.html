@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Column Configuration - CryptopixBridge</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="brand">
+                <h1>CryptopixBridge</h1>
+            </div>
+            <div class="nav-links">
+                <a href="{{ url_for('index') }}" class="nav-link">
+                    <i class="bi bi-house"></i>Dashboard
+                </a>
+                <a href="{{ url_for('migration_setup') }}" class="nav-link active">
+                    <i class="bi bi-arrow-left-right"></i>Migration
+                </a>
+                <a href="{{ url_for('query_console_page') }}" class="nav-link">
+                    <i class="bi bi-terminal"></i>Query Console
+                </a>
+                <a href="{{ url_for('systemlog') }}" class="nav-link">
+                    <i class="bi bi-journal-text"></i>System Logs
+                </a>
+                <a href="{{ url_for('settings_page') }}" class="nav-link">
+                    <i class="bi bi-gear"></i>Settings
+                </a>
+            </div>
+            <div class="user-section">
+                <div class="user-dropdown">
+                    <button class="user-dropdown-toggle" onclick="toggleDropdown()">
+                        <i class="bi bi-person-circle"></i>
+                        {{ session.get('user_email', 'User') }}
+                        <i class="bi bi-chevron-down"></i>
+                    </button>
+                    <div class="user-dropdown-menu" id="userDropdown">
+                        <div class="dropdown-item">
+                            <span>License Key:</span>
+                            <div>
+                                <span class="license-key" id="licenseKey">{{ session.get('license_key', 'N/A') }}</span>
+                                <button class="copy-btn" onclick="copyLicenseKey()" title="Copy License Key">
+                                    <i class="bi bi-clipboard"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <a href="{{ url_for('logout') }}" class="logout-btn">
+                    <i class="bi bi-box-arrow-right"></i>Logout
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <div class="main-container">
+        <div class="settings-section">
+            <div class="section-header">
+                <i class="bi bi-shield-lock"></i>
+                <h4>Column Encryption Configuration</h4>
+            </div>
+            <div class="section-content">
+                <div class="info-box">
+                    <h5><i class="bi bi-info-circle me-2"></i>Column Encryption Configuration:</h5>
+                    <ul>
+                        <li><strong>Encrypt:</strong> Data is fully encrypted and can be decrypted for queries</li>
+                        <li><strong>Normal:</strong> Data remains unencrypted</li>
+                        <li><strong>🔒 Protected:</strong> Primary keys, foreign keys, and auto-increment columns cannot be encrypted</li>
+                    </ul>
+                    <p><strong>Note:</strong> All encrypted columns will use their original names. The system automatically detects encrypted data (stored as BLOB) and decrypts it during queries.</p>
+                </div>
+
+                <div class="legend">
+                    <div class="legend-item encrypt"><i class="bi bi-shield-lock-fill"></i> Encrypt</div>
+                    <div class="legend-item normal"><i class="bi bi-file-text"></i> Normal</div>
+                    <div class="legend-item"><i class="bi bi-shield-check"></i> Protected</div>
+                </div>
+
+                <form method="POST" action="{{ url_for('configure_columns') }}">
+                    {% for table_info in table_info_list %}
+                    <div class="settings-section">
+                        <div class="section-header">
+                            <i class="bi bi-table"></i>
+                            <h4>Table: {{ table_info.name }}</h4>
+                        </div>
+                        <div class="section-content">
+                            <div class="select-all-options">
+                                <label class="encrypt-option">
+                                    <input type="checkbox" class="select-all" data-table="{{ table_info.name }}" data-type="encrypt"> Select All Encrypt
+                                </label>
+                                <label class="normal-option">
+                                    <input type="checkbox" class="select-all" data-table="{{ table_info.name }}" data-type="normal"> Select All Normal
+                                </label>
+                            </div>
+                            <div class="column-grid header">
+                                <div>Column Name</div>
+                                <div>Data Type</div>
+                                <div>Recommendation</div>
+                                <div>Encryption Type</div>
+                            </div>
+                            {% for column in table_info.columns %}
+                            <div class="column-grid">
+                                <div class="column-name">
+                                    {{ column.name }}
+                                    {% if column.is_protected %}
+                                    <i class="bi bi-shield-check" title="This column cannot be encrypted"></i>
+                                    {% endif %}
+                                </div>
+                                <div>{{ column.data_type }}</div>
+                                <div>
+                                    {% if column.is_protected %}
+                                    <span><i class="bi bi-shield-check"></i> Protected</span>
+                                    {% elif column.recommendation == 'encrypt' %}
+                                    <span><i class="bi bi-check-circle"></i> Recommended</span>
+                                    {% elif column.recommendation == 'normal' %}
+                                    <span><i class="bi bi-info-circle"></i> Not recommended</span>
+                                    {% else %}
+                                    <span><i class="bi bi-question-circle"></i> Optional</span>
+                                    {% endif %}
+                                </div>
+                                <div class="encryption-options">
+                                    {% if column.is_protected %}
+                                    <div class="option">
+                                        <input type="radio" id="{{ table_info.name }}_{{ column.name }}_normal" name="{{ table_info.name }}_{{ column.name }}" value="normal" checked disabled>
+                                        <label for="{{ table_info.name }}_{{ column.name }}_normal"><i class="bi bi-file-text"></i> Normal</label>
+                                    </div>
+                                    {% else %}
+                                    <div class="option encrypt-option">
+                                        <input type="radio" id="{{ table_info.name }}_{{ column.name }}_encrypt" name="{{ table_info.name }}_{{ column.name }}" value="encrypt" {% if column.recommendation == 'encrypt' %}checked{% endif %}>
+                                        <label for="{{ table_info.name }}_{{ column.name }}_encrypt"><i class="bi bi-shield-lock-fill"></i> Encrypt</label>
+                                    </div>
+                                    <div class="option normal-option">
+                                        <input type="radio" id="{{ table_info.name }}_{{ column.name }}_normal" name="{{ table_info.name }}_{{ column.name }}" value="normal" {% if column.recommendation != 'encrypt' %}checked{% endif %}>
+                                        <label for="{{ table_info.name }}_{{ column.name }}_normal"><i class="bi bi-file-text"></i> Normal</label>
+                                    </div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                    <div class="button-group">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check-circle"></i>Review Migration Configuration
+                        </button>
+                        <a href="{{ url_for('configure_migration') }}" class="btn btn-outline-secondary">
+                            <i class="bi bi-arrow-left"></i>Back
+                        </a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        function toggleDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        function copyLicenseKey() {
+            const licenseKey = document.getElementById('licenseKey').textContent;
+            navigator.clipboard.writeText(licenseKey).then(function() {
+                showToast('License key copied to clipboard!', 'success');
+            }).catch(function(err) {
+                showToast('Failed to copy license key', 'error');
+            });
+        }
+
+        function showToast(message, type = 'info') {
+            const toastContainer = document.getElementById('toastContainer');
+            if (!toastContainer) return;
+
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.setAttribute('role', 'alert');
+            toast.setAttribute('aria-live', 'assertive');
+            toast.setAttribute('aria-atomic', 'true');
+            toast.innerHTML = `
+                <div class="toast-body">
+                    <strong>${type.charAt(0).toUpperCase() + type.slice(1)}:</strong> ${message}
+                </div>
+            `;
+
+            toastContainer.appendChild(toast);
+
+            // Initialize Bootstrap toast with 8-second delay
+            const bsToast = new bootstrap.Toast(toast, {
+                autohide: true,
+                delay: 8000
+            });
+            bsToast.show();
+
+            // Remove from DOM after hiding
+            toast.addEventListener('hidden.bs.toast', () => {
+                toast.remove();
+            });
+        }
+
+        document.querySelectorAll('.select-all').forEach(checkbox => {
+            checkbox.addEventListener('change', function() {
+                const table = this.getAttribute('data-table');
+                const type = this.getAttribute('data-type');
+
+                // Uncheck other select-all checkboxes for the same table
+                document.querySelectorAll(`.select-all[data-table="${table}"]`).forEach(cb => {
+                    if (cb !== this) {
+                        cb.checked = false;
+                    }
+                });
+
+                // Update radio buttons for the table
+                document.querySelectorAll(`input[name*="${table}_"]`).forEach(radio => {
+                    if (radio.value === type) {
+                        radio.checked = this.checked;
+                    } else if (this.checked) {
+                        radio.checked = false;
+                    }
+                });
+            });
+        });
+
+        // Ensure only one select-all checkbox is checked at a time
+        document.querySelectorAll('.select-all').forEach(checkbox => {
+            checkbox.addEventListener('click', function() {
+                if (this.checked) {
+                    const table = this.getAttribute('data-table');
+                    document.querySelectorAll(`.select-all[data-table="${table}"]`).forEach(cb => {
+                        if (cb !== this) {
+                            cb.checked = false;
+                        }
+                    });
+                }
+            });
+        });
+
+        document.addEventListener('click', function(event) {
+            const dropdown = document.getElementById('userDropdown');
+            const toggle = event.target.closest('.user-dropdown-toggle');
+
+            if (!toggle && dropdown.classList.contains('show')) {
+                dropdown.classList.remove('show');
+            }
+        });
+    </script>
+</body>
+</html>

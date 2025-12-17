@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Migration Progress - CryptopixBridge</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+   
+</head>
+
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="brand">
+                <h1>CryptopixBridge</h1>
+            </div>
+            <div class="nav-links">
+                <a href="{{ url_for('index') }}" class="nav-link">
+                    <i class="bi bi-house"></i>Dashboard
+                </a>
+                <a href="{{ url_for('migration_setup') }}" class="nav-link active">
+                    <i class="bi bi-arrow-left-right"></i>Migration
+                </a>
+                <a href="{{ url_for('query_console_page') }}" class="nav-link">
+                    <i class="bi bi-terminal"></i>Query Console
+                </a>
+                <a href="{{ url_for('systemlog') }}" class="nav-link">
+                    <i class="bi bi-journal-text"></i>System Logs
+                </a>
+                <a href="{{ url_for('settings_page') }}" class="nav-link">
+                    <i class="bi bi-gear"></i>Settings
+                </a>
+            </div>
+            <div class="user-section">
+                <div class="user-dropdown">
+                    <button class="user-dropdown-toggle" onclick="toggleDropdown()">
+                        <i class="bi bi-person-circle"></i>
+                        {{ session.get('user_email', 'User') }}
+                        <i class="bi bi-chevron-down"></i>
+                    </button>
+                    <div class="user-dropdown-menu" id="userDropdown">
+                        <div class="dropdown-item">
+                            <span>License Key:</span>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span class="license-key" id="licenseKey">{{ session.get('license_key', 'N/A') }}</span>
+                                <button class="copy-btn" onclick="copyLicenseKey()" title="Copy License Key">
+                                    <i class="bi bi-clipboard"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <a href="{{ url_for('logout') }}" class="logout-btn">
+                    <i class="bi bi-box-arrow-right"></i>Logout
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Toast container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <div class="main-container">
+        <h2 class="mb-4">Migration in Progress</h2>
+
+        <div class="progress-container">
+            <div class="progress">
+                <div class="progress-bar" id="progressBar"></div>
+            </div>
+            <div class="progress-text" id="progressText">0%</div>
+        </div>
+
+        <div class="status-message" id="statusMessage">Initializing migration...</div>
+
+        <div class="stats-grid" id="statsGrid">
+            <div class="stat-card">
+                <div class="stat-value" id="currentTable">-</div>
+                <div class="stat-label">Current Table</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="completedTables">0</div>
+                <div class="stat-label">Tables Done</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="totalTables">0</div>
+                <div class="stat-label">Total Tables</div>
+            </div>
+        </div>
+
+        <div class="loading-spinner" id="loadingSpinner"></div>
+
+        <div id="errorMessage" class="error-message" style="display: none;"></div>
+        <div id="successMessage" class="success-message" style="display: none;"></div>
+
+        <!-- Completion Section (hidden initially) -->
+        <div id="completionSection" style="display: none;">
+            <div class="success-message">
+                <i class="bi bi-check-circle-fill me-2"></i>
+                <strong>Migration completed successfully!</strong>
+            </div>
+
+            <div class="mt-4">
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle me-2"></i>
+                    <strong>Next Steps:</strong>
+                    <ul class="mb-0 mt-2">
+                        <li>Your database has been successfully encrypted using CLWE encryption</li>
+                        <li>All data is encrypted at rest using quantum-resistant encryption</li>
+                        <li>Test queries using the Query Console to verify encryption</li>
+                        <li>Start the Virtual Database Server from Settings when ready</li>
+                        <li>Check system logs for detailed migration information</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="button-group">
+                <a href="{{ url_for('query_console_page') }}" class="btn btn-primary">
+                    <i class="bi bi-terminal me-1"></i>Go to Query Console
+                </a>
+                <a href="{{ url_for('settings_page') }}" class="btn btn-outline-primary">
+                    <i class="bi bi-gear me-1"></i>Go to Settings
+                </a>
+                <a href="{{ url_for('index') }}" class="btn btn-outline-secondary">
+                    <i class="bi bi-house me-1"></i>Back to Dashboard
+                </a>
+            </div>
+        </div>
+
+        <div class="mt-4" id="refreshButton">
+            <button class="btn btn-outline-primary" onclick="refreshProgress()">Refresh Status</button>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let progressInterval;
+        let isCompleted = false;
+
+        function showToast(message, type = 'success') {
+            const toastContainer = document.getElementById('toastContainer');
+            if (!toastContainer) return;
+
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.setAttribute('role', 'alert');
+            toast.setAttribute('aria-live', 'assertive');
+            toast.setAttribute('aria-atomic', 'true');
+            toast.innerHTML = `
+                <div class="toast-body">
+                    <strong>${type.charAt(0).toUpperCase() + type.slice(1)}:</strong> ${message}
+                </div>
+            `;
+
+            toastContainer.appendChild(toast);
+
+            const bsToast = new bootstrap.Toast(toast, {
+                autohide: true,
+                delay: 8000
+            });
+            bsToast.show();
+
+            toast.addEventListener('hidden.bs.toast', () => {
+                toast.remove();
+            });
+        }
+
+        function updateProgress(data) {
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.getElementById('progressText');
+            const statusMessage = document.getElementById('statusMessage');
+            const currentTable = document.getElementById('currentTable');
+            const completedTables = document.getElementById('completedTables');
+            const totalTables = document.getElementById('totalTables');
+            const loadingSpinner = document.getElementById('loadingSpinner');
+            const errorMessage = document.getElementById('errorMessage');
+            const successMessage = document.getElementById('successMessage');
+
+            // Update progress bar
+            progressBar.style.width = data.progress + '%';
+            progressText.textContent = Math.round(data.progress) + '%';
+
+            // Update status message
+            statusMessage.textContent = data.message || 'Processing...';
+
+            // Update stats
+            currentTable.textContent = data.current_table || '-';
+            completedTables.textContent = data.completed_tables || 0;
+            totalTables.textContent = data.total_tables || 0;
+
+            // Handle different states
+            if (data.status === 'completed') {
+                if (!isCompleted) {
+                    isCompleted = true;
+                    clearInterval(progressInterval);
+                    loadingSpinner.style.display = 'none';
+                    successMessage.textContent = 'Migration completed successfully!';
+                    successMessage.style.display = 'block';
+                    showToast('Migration completed successfully!', 'success');
+
+                    // Show completion section with VDS details
+                    showCompletionSection();
+                }
+            } else if (data.status === 'failed') {
+                if (!isCompleted) { // Don't override completed state
+                    clearInterval(progressInterval);
+                    loadingSpinner.style.display = 'none';
+                    errorMessage.textContent = 'Migration failed: ' + (data.error || 'Unknown error');
+                    errorMessage.style.display = 'block';
+                    showToast('Migration failed: ' + (data.error || 'Unknown error'), 'error');
+                }
+            } else if (data.status === 'running' && !isCompleted) {
+                loadingSpinner.style.display = 'block';
+                errorMessage.style.display = 'none';
+                successMessage.style.display = 'none';
+            }
+        }
+
+        function fetchProgress() {
+            fetch('/api/migration_progress')
+                .then(response => response.json())
+                .then(data => {
+                    updateProgress(data);
+                })
+                .catch(error => {
+                    console.error('Error fetching progress:', error);
+                    document.getElementById('statusMessage').textContent = 'Error connecting to server...';
+                });
+        }
+
+        function showCompletionSection() {
+            const completionSection = document.getElementById('completionSection');
+            const refreshButton = document.getElementById('refreshButton');
+            const loadingSpinner = document.getElementById('loadingSpinner');
+
+            completionSection.style.display = 'block';
+            refreshButton.style.display = 'none';
+            loadingSpinner.style.display = 'none'; // Ensure spinner is hidden
+        }
+
+        function toggleDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        function copyLicenseKey() {
+            const licenseKey = document.getElementById('licenseKey').textContent;
+            navigator.clipboard.writeText(licenseKey).then(function () {
+                showToast('License key copied to clipboard', 'success');
+            }).catch(function (err) {
+                showToast('Failed to copy license key', 'error');
+            });
+        }
+
+        function refreshProgress() {
+            fetchProgress();
+            showToast('Status refreshed', 'success');
+        }
+
+        // Start polling for progress updates
+        document.addEventListener('DOMContentLoaded', function () {
+            fetchProgress(); // Initial fetch
+            progressInterval = setInterval(fetchProgress, 2000); // Update every 2 seconds
+        });
+
+        // Clean up interval when page unloads
+        window.addEventListener('beforeunload', function () {
+            if (progressInterval) {
+                clearInterval(progressInterval);
+            }
+        });
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function (event) {
+            const dropdown = document.getElementById('userDropdown');
+            const toggle = event.target.closest('.user-dropdown-toggle');
+
+            if (!toggle && dropdown.classList.contains('show')) {
+                dropdown.classList.remove('show');
+            }
+        });
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Migration Setup - CryptopixBridge</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+   
+</head>
+
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="brand">
+                <h1>CryptopixBridge</h1>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link">
+                    <i class="bi bi-house me-1"></i>Dashboard
+                </a>
+                <a href="/migration" class="nav-link active">
+                    <i class="bi bi-arrow-left-right me-1"></i>Migration
+                </a>
+                <a href="/query_console" class="nav-link">
+                    <i class="bi bi-terminal me-1"></i>Query Console
+                </a>
+                <a href="{{ url_for('systemlog') }}" class="nav-link">
+                    <i class="bi bi-journal-text me-1"></i>System Logs
+                </a>
+                <a href="/settings" class="nav-link">
+                    <i class="bi bi-gear me-1"></i>Settings
+                </a>
+            </div>
+            <div class="user-section">
+                <div class="user-dropdown">
+                    <button class="user-dropdown-toggle" onclick="toggleDropdown()">
+                        <i class="bi bi-person-circle"></i>
+                        {{ session.get('user_email', 'User') }}
+                        <i class="bi bi-chevron-down ms-1"></i>
+                    </button>
+                    <div class="user-dropdown-menu" id="userDropdown">
+                        <div class="dropdown-item">
+                            <span>License Key:</span>
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="license-key" id="licenseKey">{{ session.get('license_key', 'N/A') }}</span>
+                                <button class="copy-btn" onclick="copyLicenseKey()" title="Copy License Key">
+                                    <i class="bi bi-clipboard"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <a href="{{ url_for('logout') }}" class="logout-btn">
+                    <i class="bi bi-box-arrow-right me-1"></i>Logout
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <div class="main-container">
+        <!-- Toast container -->
+        <div class="toast-container" id="toastContainer"></div>
+
+        <div class="page-header">
+            <h2>Database Migration Setup</h2>
+            <p>Configure your source and encrypted databases to begin the migration process</p>
+        </div>
+
+        <div class="process-steps">
+            <h6>Migration Process Overview:</h6>
+            <ol>
+                <li>Configure source database connection (original unencrypted data)</li>
+                <li>Configure encrypted database connection (destination for secure data)</li>
+                <li>Select tables and columns for migration</li>
+                <li>Configure encryption settings for sensitive columns</li>
+                <li>Execute bulk data migration with encryption</li>
+            </ol>
+        </div>
+
+        <!-- Flashed messages will be shown as toasts -->
+        <script>
+            // Show flashed messages as toasts
+            {% with messages = get_flashed_messages() %}
+            {% if messages %}
+            {% for message in messages %}
+            setTimeout(() => showToast('{{ message }}', 'success'), {{ loop.index * 500 }});
+            {% endfor %}
+            {% endif %}
+            {% endwith %}
+        </script>
+
+        <form method="POST" action="/configure_migration" id="migrationForm">
+            <div class="form-toggle">
+                <div>
+                    <strong>Configuration Mode:</strong>
+                    <small class="d-block text-muted">Choose between guided setup or manual URL entry</small>
+                </div>
+                <div class="d-flex align-items-center gap-3">
+                    <label class="form-check-label">
+                        <input type="radio" name="config_mode" value="guided" checked onchange="toggleConfigMode()">
+                        Guided Setup
+                    </label>
+                    <label class="form-check-label">
+                        <input type="radio" name="config_mode" value="manual" onchange="toggleConfigMode()">
+                        Manual URL
+                    </label>
+                </div>
+            </div>
+            <br>
+            <br>
+            
+
+            <input type="hidden" name="source_url_generated" id="sourceUrlGenerated">
+            <input type="hidden" name="encrypted_url_generated" id="encryptedUrlGenerated">
+
+
+            <div class="config-list">
+                <div class="detail-card" id="sourceCard">
+                <div class="card-header">
+                    <h5><i class="bi bi-database me-2"></i>Source Database Configuration</h5>
+                </div>
+                <div class="card-body">
+
+                <div class="form-section active" id="sourceGuidedSection">
+                    <div class="form-group">
+                        <label class="form-label">Database Type:</label>
+                        <div class="db-type-selector">
+                            <div class="db-type-option" data-type="mysql" data-prefix="source">
+                                <input type="radio" name="source_db_type" value="mysql" id="source_mysql">
+                                <i class="bi bi-database db-icon"></i>
+                                <div class="db-name">MySQL</div>
+                            </div>
+                            <div class="db-type-option" data-type="postgresql" data-prefix="source">
+                                <input type="radio" name="source_db_type" value="postgresql" id="source_postgresql">
+                                <i class="bi bi-server db-icon"></i>
+                                <div class="db-name">PostgreSQL</div>
+                            </div>
+                            <div class="db-type-option" data-type="sqlite" data-prefix="source">
+                                <input type="radio" name="source_db_type" value="sqlite" id="source_sqlite">
+                                <i class="bi bi-file-earmark-data db-icon"></i>
+                                <div class="db-name">SQLite</div>
+                            </div>
+                            <div class="db-type-option" data-type="mongodb" data-prefix="source">
+                                <input type="radio" name="source_db_type" value="mongodb" id="source_mongodb">
+                                <i class="bi bi-leaf db-icon"></i>
+                                <div class="db-name">MongoDB</div>
+                            </div>
+                            <div class="db-type-option" data-type="oracle" data-prefix="source">
+                                <input type="radio" name="source_db_type" value="oracle" id="source_oracle">
+                                <i class="bi bi-circle db-icon"></i>
+                                <div class="db-name">Oracle</div>
+                            </div>
+                            <div class="db-type-option" data-type="mssql" data-prefix="source">
+                                <input type="radio" name="source_db_type" value="mssql" id="source_mssql">
+                                <i class="bi bi-windows db-icon"></i>
+                                <div class="db-name">SQL Server</div>
+                            </div>
+                            <div class="db-type-option" data-type="redis" data-prefix="source">
+                                <input type="radio" name="source_db_type" value="redis" id="source_redis">
+                                <i class="bi bi-lightning db-icon"></i>
+                                <div class="db-name">Redis</div>
+                            </div>
+                            <div class="db-type-option" data-type="cassandra" data-prefix="source">
+                                <input type="radio" name="source_db_type" value="cassandra" id="source_cassandra">
+                                <i class="bi bi-pentagon db-icon"></i>
+                                <div class="db-name">Cassandra</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="connection-grid">
+                        <div class="form-group">
+                            <label class="form-label" for="source_host">Host:</label>
+                            <input type="text" class="form-control" name="source_host" id="source_host"
+                                placeholder="localhost" value="localhost">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="source_port">Port:</label>
+                            <input type="text" class="form-control" name="source_port" id="source_port"
+                                placeholder="3306">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="source_username">Username:</label>
+                            <input type="text" class="form-control" name="source_username" id="source_username"
+                                placeholder="username">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="source_password">Password:</label>
+                            <input type="password" class="form-control" name="source_password" id="source_password"
+                                placeholder="password">
+                        </div>
+                        <div class="form-group" style="grid-column: 1 / -1;">
+                            <label class="form-label" for="source_database">Database Name:</label>
+                            <input type="text" class="form-control" name="source_database" id="source_database"
+                                placeholder="source_database">
+                        </div>
+                    </div>
+
+                    <div class="url-preview" id="sourceUrlPreview">
+                        <div class="url-preview-label">Generated Connection URL:</div>
+                        <span id="sourceUrlText">Configure database settings to see preview</span>
+                    </div>
+                </div>
+
+                <div class="form-section" id="sourceManualSection">
+                    <div class="form-group">
+                        <label class="form-label" for="source_url">Source Database URL:</label>
+                        <input type="text" class="form-control" name="source_url" id="source_url"
+                            placeholder="mysql://user:password@localhost:3306/source_db">
+                        <div class="input-help">Enter the complete connection URL for your source database</div>
+                        <div class="connection-examples">
+                            <strong>Connection URL Examples:</strong><br>
+                            MySQL: mysql://user:password@localhost:3306/database<br>
+                            PostgreSQL: postgresql://user:password@localhost:5432/database<br>
+                            SQLite: sqlite:///path/to/database.db<br>
+                            MongoDB: mongodb://user:password@localhost:27017/database<br>
+                            Oracle: oracle://user:password@localhost:1521/database<br>
+                            SQL Server: mssql://user:password@localhost:1433/database<br>
+                            Redis: redis://:password@localhost:6379/0<br>
+                            Cassandra: cassandra://user:password@localhost:9042/keyspace
+                        </div>
+                    </div>
+                </div>
+               </div>
+</div>
+            <div class="detail-card" id="encryptedCard">
+                <div class="card-header">
+                    <h5><i class="bi bi-shield-lock me-2"></i>Encrypted Database Configuration</h5>
+                </div>
+                <div class="card-body">
+
+                <div class="form-section active" id="encryptedGuidedSection">
+                    <div class="form-group">
+                        <label class="form-label">Database Type:</label>
+                        <div class="db-type-selector">
+                            <div class="db-type-option" data-type="mysql" data-prefix="encrypted">
+                                <input type="radio" name="encrypted_db_type" value="mysql" id="encrypted_mysql">
+                                <i class="bi bi-database db-icon"></i>
+                                <div class="db-name">MySQL</div>
+                            </div>
+                            <div class="db-type-option" data-type="postgresql" data-prefix="encrypted">
+                                <input type="radio" name="encrypted_db_type" value="postgresql"
+                                    id="encrypted_postgresql">
+                                <i class="bi bi-server db-icon"></i>
+                                <div class="db-name">PostgreSQL</div>
+                            </div>
+                            <div class="db-type-option" data-type="sqlite" data-prefix="encrypted">
+                                <input type="radio" name="encrypted_db_type" value="sqlite" id="encrypted_sqlite">
+                                <i class="bi bi-file-earmark-data db-icon"></i>
+                                <div class="db-name">SQLite</div>
+                            </div>
+                            <div class="db-type-option" data-type="mongodb" data-prefix="encrypted">
+                                <input type="radio" name="encrypted_db_type" value="mongodb" id="encrypted_mongodb">
+                                <i class="bi bi-leaf db-icon"></i>
+                                <div class="db-name">MongoDB</div>
+                            </div>
+                            <div class="db-type-option" data-type="oracle" data-prefix="encrypted">
+                                <input type="radio" name="encrypted_db_type" value="oracle" id="encrypted_oracle">
+                                <i class="bi bi-circle db-icon"></i>
+                                <div class="db-name">Oracle</div>
+                            </div>
+                            <div class="db-type-option" data-type="mssql" data-prefix="encrypted">
+                                <input type="radio" name="encrypted_db_type" value="mssql" id="encrypted_mssql">
+                                <i class="bi bi-windows db-icon"></i>
+                                <div class="db-name">SQL Server</div>
+                            </div>
+                            <div class="db-type-option" data-type="redis" data-prefix="encrypted">
+                                <input type="radio" name="encrypted_db_type" value="redis" id="encrypted_redis">
+                                <i class="bi bi-lightning db-icon"></i>
+                                <div class="db-name">Redis</div>
+                            </div>
+                            <div class="db-type-option" data-type="cassandra" data-prefix="encrypted">
+                                <input type="radio" name="encrypted_db_type" value="cassandra" id="encrypted_cassandra">
+                                <i class="bi bi-pentagon db-icon"></i>
+                                <div class="db-name">Cassandra</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="connection-grid">
+                        <div class="form-group">
+                            <label class="form-label" for="encrypted_host">Host:</label>
+                            <input type="text" class="form-control" name="encrypted_host" id="encrypted_host"
+                                placeholder="localhost" value="localhost">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="encrypted_port">Port:</label>
+                            <input type="text" class="form-control" name="encrypted_port" id="encrypted_port"
+                                placeholder="3306">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="encrypted_username">Username:</label>
+                            <input type="text" class="form-control" name="encrypted_username" id="encrypted_username"
+                                placeholder="username">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="encrypted_password">Password:</label>
+                            <input type="password" class="form-control" name="encrypted_password"
+                                id="encrypted_password" placeholder="password">
+                        </div>
+                        <div class="form-group" style="grid-column: 1 / -1;">
+                            <label class="form-label" for="encrypted_database">Database Name:</label>
+                            <input type="text" class="form-control" name="encrypted_database" id="encrypted_database"
+                                placeholder="encrypted_database">
+                        </div>
+                    </div>
+
+                    <div class="url-preview" id="encryptedUrlPreview">
+                        <div class="url-preview-label">Generated Connection URL:</div>
+                        <span id="encryptedUrlText">Configure database settings to see preview</span>
+                    </div>
+                </div>
+
+                <div class="form-section" id="encryptedManualSection">
+                    <div class="form-group">
+                        <label class="form-label" for="encrypted_url">Encrypted Database URL:</label>
+                        <input type="text" class="form-control" name="encrypted_url" id="encrypted_url"
+                            placeholder="mysql://user:password@localhost:3306/encrypted_db">
+                        <div class="input-help">Enter the complete connection URL for your encrypted database</div>
+                        <div class="connection-examples">
+                            <strong>Connection URL Examples:</strong><br>
+                            MySQL: mysql://user:password@localhost:3306/database<br>
+                            PostgreSQL: postgresql://user:password@localhost:5432/database<br>
+                            SQLite: sqlite:///path/to/database.db<br>
+                            MongoDB: mongodb://user:password@localhost:27017/database<br>
+                            Oracle: oracle://user:password@localhost:1521/database<br>
+                            SQL Server: mssql://user:password@localhost:1433/database<br>
+                            Redis: redis://:password@localhost:6379/0<br>
+                            Cassandra: cassandra://user:password@localhost:9042/keyspace
+                        </div>
+                    </div>
+                </div>
+               </div>
+            </div>
+               <!-- Encryption Password Configuration -->
+               <div class="detail-card">
+                <div class="card-header">
+                    <h5><i class="bi bi-key me-2"></i>Encryption Password Configuration</h5>
+                </div>
+                <div class="card-body">
+                <p class="text-muted" style="font-size: 12px; margin-bottom: 20px;">
+                    Set a strong encryption password to secure your data. This password will be used to encrypt all
+                    sensitive data in your database.
+                    <strong>Important:</strong> Store this password securely - you'll need it to decrypt your data.
+                </p>
+
+                <div class="alert alert-info"
+                    style="background: #d1ecf1; border: 1px solid #17a2b8; border-radius: 6px; padding: 12px; margin-bottom: 20px; font-size: 12px;">
+                    <div style="display: flex; align-items: start; gap: 12px;">
+                        <i class="bi bi-info-circle-fill" style="color: #0c5460; font-size: 16px;"></i>
+                        <div style="color: #0c5460;">
+                            <strong>Optional Field:</strong> If you don't set a password here, the system will:
+                            <ol style="margin: 8px 0 0 20px; padding: 0;">
+                                <li>Use your existing password from configuration (if available), OR</li>
+                                <li>Auto-generate a secure random password for you</li>
+                            </ol>
+                            <strong>Recommended:</strong> Set your own password for better control and security.
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="encryption_password">
+                        <i class="bi bi-shield-lock me-1"></i>Encryption Password (Optional):
+                    </label>
+                    <div style="position: relative;">
+                        <input type="password" class="form-control" name="encryption_password" id="encryption_password"
+                            placeholder="Enter a strong encryption password (or leave empty for auto-generation)"
+                            oninput="checkPasswordStrength()">
+                        <button type="button" class="btn-toggle-password"
+                            onclick="togglePasswordVisibility('encryption_password')"
+                            style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; color: #666;">
+                            <i class="bi bi-eye" id="encryption_password_icon"></i>
+                        </button>
+                    </div>
+                    <div class="input-help">
+                        Password must be at least 12 characters long and include uppercase, lowercase, numbers, and
+                        special characters
+                    </div>
+
+                    <!-- Password Strength Indicator -->
+                    <div class="password-strength-container" style="margin-top: 12px; display: none;"
+                        id="passwordStrengthContainer">
+                        <div class="password-strength-label"
+                            style="font-size: 11px; font-weight: 600; margin-bottom: 6px; display: flex; justify-content: space-between;">
+                            <span>Password Strength:</span>
+                            <span id="strengthText" style="color: #dc3545;">Weak</span>
+                        </div>
+                        <div class="password-strength-bar"
+                            style="height: 6px; background: var(--border-color); border-radius: 3px; overflow: hidden;">
+                            <div id="strengthBar"
+                                style="height: 100%; width: 0%; background: #dc3545; transition: all 0.3s;"></div>
+                        </div>
+                        <div id="passwordRequirements" style="margin-top: 8px; font-size: 11px;">
+                            <div class="requirement" id="req_length" style="color: #dc3545;">
+                                <i class="bi bi-x-circle"></i> At least 12 characters
+                            </div>
+                            <div class="requirement" id="req_uppercase" style="color: #dc3545;">
+                                <i class="bi bi-x-circle"></i> One uppercase letter
+                            </div>
+                            <div class="requirement" id="req_lowercase" style="color: #dc3545;">
+                                <i class="bi bi-x-circle"></i> One lowercase letter
+                            </div>
+                            <div class="requirement" id="req_number" style="color: #dc3545;">
+                                <i class="bi bi-x-circle"></i> One number
+                            </div>
+                            <div class="requirement" id="req_special" style="color: #dc3545;">
+                                <i class="bi bi-x-circle"></i> One special character (!@#$%^&*)
+                            </div>
+                        </div>
+
+                 <div class="form-group">
+                    <label class="form-label" for="encryption_password_confirm">
+                        <i class="bi bi-shield-check me-1"></i>Confirm Encryption Password (Optional):
+                    </label>
+                    <div style="position: relative;">
+                        <input type="password" class="form-control" name="encryption_password_confirm"
+                            id="encryption_password_confirm"
+                            placeholder="Re-enter your encryption password (if provided above)"
+                            oninput="checkPasswordMatch()">
+                        <button type="button" class="btn-toggle-password"
+                            onclick="togglePasswordVisibility('encryption_password_confirm')"
+                            style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; color: #666;">
+                            <i class="bi bi-eye" id="encryption_password_confirm_icon"></i>
+                        </button>
+                    </div>
+                    <div id="passwordMatchMessage" style="font-size: 11px; margin-top: 4px; display: none;"></div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="security_level">
+                        <i class="bi bi-shield-fill-check me-1"></i>Security Level:
+                    </label>
+                    <select class="form-control" name="security_level" id="security_level">
+                        <option value="Min">Minimum (Faster, Less Secure)</option>
+                        <option value="Medium" selected>Medium (Balanced)</option>
+                        <option value="Max">Maximum (Slower, Most Secure)</option>
+                    </select>
+                    <div class="input-help">
+                        Higher security levels provide stronger encryption but may impact performance
+                    </div>
+                </div>
+
+                <!-- Security Notice -->
+                <div class="alert alert-warning"
+                    style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; padding: 16px; margin-top: 20px; font-size: 12px;">
+                    <div style="display: flex; align-items: start; gap: 12px;">
+                        <i class="bi bi-exclamation-triangle-fill" style="color: #856404; font-size: 20px;"></i>
+                        <div>
+                            <strong style="color: #856404; display: block; margin-bottom: 6px;">Security
+                                Notice:</strong>
+                            <ul style="margin: 0; padding-left: 20px; color: #856404;">
+                                <li>Your encryption password is <strong>NOT</strong> stored anywhere in the system</li>
+                                <li>If you lose this password, your encrypted data <strong>CANNOT</strong> be recovered
+                                </li>
+                                <li>Store this password in a secure password manager</li>
+                                <li>Never share this password with anyone</li>
+                                <li>Consider backing up this password in a secure location</li>
+                            </ul>
+                        </li>
+                    </ol>
+           
+                        </div>
+                    </div>
+        
+        
+                    </div>
+                    </div>
+                    </div></div>
+           </div>
+        </form>
+        
+<div class="action-buttons">
+                <button type="submit" class="btn btn-primary" id="submitBtn">
+                    <i class="bi bi-arrow-right me-2"></i>Continue to Table Selection
+                </button>
+                <a href="/dashboard" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left me-2"></i>Back to Dashboard
+                </a>
+        </div>
+        
+    </div>
+
+
+    <script>
+        let isManualMode = false;
+
+        const dbConfigs = {
+            mysql: { port: '3306' },
+            postgresql: { port: '5432' },
+            sqlite: { port: '' },
+            mongodb: { port: '27017' },
+            oracle: { port: '1521' },
+            mssql: { port: '1433' },
+            redis: { port: '6379' },
+            cassandra: { port: '9042' }
+        };
+
+        function showToast(message, type = 'info') {
+            const toastContainer = document.getElementById('toastContainer');
+            if (!toastContainer) return;
+
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.setAttribute('role', 'alert');
+            toast.setAttribute('aria-live', 'assertive');
+            toast.setAttribute('aria-atomic', 'true');
+            toast.innerHTML = `
+                <div class="toast-body">
+                    <strong>${type.charAt(0).toUpperCase() + type.slice(1)}:</strong> ${message}
+                </div>
+            `;
+
+            toastContainer.appendChild(toast);
+
+            // Initialize Bootstrap toast with 8-second delay
+            const bsToast = new bootstrap.Toast(toast, {
+                autohide: true,
+                delay: 8000
+            });
+            bsToast.show();
+
+            // Remove from DOM after hiding
+            toast.addEventListener('hidden.bs.toast', () => {
+                toast.remove();
+            });
+        }
+
+        function toggleConfigMode() {
+            const guidedRadio = document.querySelector('input[name="config_mode"][value="guided"]');
+            isManualMode = !guidedRadio.checked;
+            document.getElementById('sourceGuidedSection').classList.toggle('active', !isManualMode);
+            document.getElementById('sourceManualSection').classList.toggle('active', isManualMode);
+            document.getElementById('encryptedGuidedSection').classList.toggle('active', !isManualMode);
+            document.getElementById('encryptedManualSection').classList.toggle('active', isManualMode);
+        }
+
+        function selectDbType(type, prefix) {
+            const portField = document.getElementById(prefix + '_port');
+            if (portField && dbConfigs[type]) {
+                portField.value = dbConfigs[type].port;
+            }
+
+            document.querySelectorAll(`input[name="${prefix}_db_type"]`).forEach(option => {
+                const label = option.closest('.db-type-option');
+                if (option.value === type) {
+                    label.classList.add('selected');
+                    option.checked = true;
+                } else {
+                    label.classList.remove('selected');
+                }
+            });
+
+            const fields = ['host', 'username', 'password', 'database', 'port'];
+            fields.forEach(field => {
+                const element = document.getElementById(`${prefix}_${field}`);
+                const group = element?.closest('.form-group');
+                if (group) {
+                    if (type === 'sqlite' && ['host', 'username', 'password', 'port'].includes(field)) {
+                        group.style.display = 'none';
+                    } else if (type === 'redis' && field === 'username') {
+                        group.style.display = 'none';
+                    } else {
+                        group.style.display = 'block';
+                    }
+                }
+            });
+
+            const databaseField = document.getElementById(`${prefix}_database`);
+            const databaseLabel = databaseField?.previousElementSibling;
+            if (databaseField && databaseLabel) {
+                if (type === 'sqlite') {
+                    databaseField.placeholder = '/path/to/database.db';
+                    databaseLabel.textContent = 'Database File Path:';
+                } else if (type === 'redis') {
+                    databaseField.placeholder = '0';
+                    databaseLabel.textContent = 'Database Number:';
+                } else {
+                    databaseField.placeholder = 'database_name';
+                    databaseLabel.textContent = 'Database Name:';
+                }
+            }
+
+            updateUrlPreview(prefix);
+        }
+
+        function generateConnectionUrl(prefix) {
+            const dbType = document.querySelector(`input[name="${prefix}_db_type"]:checked`);
+            if (!dbType) return '';
+
+            const type = dbType.value;
+            const host = document.getElementById(`${prefix}_host`)?.value || 'localhost';
+            const port = document.getElementById(`${prefix}_port`)?.value || '';
+            const username = document.getElementById(`${prefix}_username`)?.value || '';
+            const password = document.getElementById(`${prefix}_password`)?.value || '';
+            const database = document.getElementById(`${prefix}_database`)?.value || '';
+
+            if (type === 'sqlite') {
+                return database ? `sqlite:///${database}` : '';
+            }
+
+            if (type === 'redis') {
+                let url = 'redis://';
+                if (password) {
+                    url += `:${password}@`;
+                }
+                url += host;
+                if (port) {
+                    url += `:${port}`;
+                }
+                if (database) {
+                    url += `/${database}`;
+                }
+                return url;
+            }
+
+            if (!database) return '';
+
+            let url = `${type}://`;
+            if (username && password) {
+                url += `${username}:${password}@`;
+            } else if (username) {
+                url += `${username}@`;
+            }
+
+            url += host;
+            if (port) {
+                url += `:${port}`;
+            }
+            url += `/${database}`;
+
+            return url;
+        }
+
+        function updateUrlPreview(prefix) {
+            const url = generateConnectionUrl(prefix);
+            const previewElement = document.getElementById(`${prefix}UrlText`);
+
+            if (previewElement) {
+                if (url) {
+                    previewElement.textContent = url;
+                    previewElement.style.color = 'var(--text-color)';
+                } else {
+                    previewElement.textContent = 'Configure database settings to see preview';
+                    previewElement.style.color = '#999';
+                }
+            }
+
+            const hiddenField = document.getElementById(`${prefix}UrlGenerated`);
+            if (hiddenField) {
+                hiddenField.value = url;
+            }
+        }
+
+        function toggleDropdown() {
+            document.getElementById('userDropdown').classList.toggle('show');
+        }
+
+        function copyLicenseKey() {
+            const licenseKey = document.getElementById('licenseKey').textContent;
+            navigator.clipboard.writeText(licenseKey).then(function () {
+                showToast('License key copied to clipboard', 'success');
+            }).catch(function (err) {
+                showToast('Failed to copy license key', 'error');
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', function () {
+            document.querySelectorAll('.db-type-option').forEach(option => {
+                option.addEventListener('click', function () {
+                    const type = this.dataset.type;
+                    const prefix = this.dataset.prefix;
+                    selectDbType(type, prefix);
+                });
+            });
+
+            ['source_host', 'source_port', 'source_username', 'source_password', 'source_database',
+                'encrypted_host', 'encrypted_port', 'encrypted_username', 'encrypted_password', 'encrypted_database'
+            ].forEach(fieldId => {
+                const field = document.getElementById(fieldId);
+                if (field) {
+                    const prefix = fieldId.startsWith('source') ? 'source' : 'encrypted';
+                    field.addEventListener('input', () => updateUrlPreview(prefix));
+                }
+            });
+
+            document.addEventListener('click', function (event) {
+                const dropdown = document.getElementById('userDropdown');
+                if (!event.target.closest('.user-dropdown-toggle') && dropdown.classList.contains('show')) {
+                    dropdown.classList.remove('show');
+                }
+            });
+
+            document.getElementById('migrationForm').addEventListener('submit', function (e) {
+                // Set the generated hidden fields for guided mode if needed
+                if (!isManualMode) {
+                    const sourceUrl = generateConnectionUrl('source');
+                    const encryptedUrl = generateConnectionUrl('encrypted');
+                    document.getElementById('sourceUrlGenerated').value = sourceUrl;
+                    document.getElementById('encryptedUrlGenerated').value = encryptedUrl;
+                }
+
+                showToast('Validating database connections...', 'info');
+                // Let the form submit normally - backend will handle validation
+            });
+
+            updateUrlPreview('source');
+            updateUrlPreview('encrypted');
+
+            // Ensure guided setup is visible initially
+            document.getElementById('sourceManualSection').classList.remove('active');
+            document.getElementById('encryptedManualSection').classList.remove('active');
+            document.getElementById('sourceGuidedSection').classList.add('active');
+            document.getElementById('encryptedGuidedSection').classList.add('active');
+        });
+
+        // Password strength checker
+        function checkPasswordStrength() {
+            const password = document.getElementById('encryption_password').value;
+            const container = document.getElementById('passwordStrengthContainer');
+            const strengthBar = document.getElementById('strengthBar');
+            const strengthText = document.getElementById('strengthText');
+
+            if (password.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+
+            container.style.display = 'block';
+
+            // Check requirements
+            const requirements = {
+                length: password.length >= 12,
+                uppercase: /[A-Z]/.test(password),
+                lowercase: /[a-z]/.test(password),
+                number: /[0-9]/.test(password),
+                special: /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)
+            };
+
+            // Update requirement indicators
+            updateRequirement('req_length', requirements.length);
+            updateRequirement('req_uppercase', requirements.uppercase);
+            updateRequirement('req_lowercase', requirements.lowercase);
+            updateRequirement('req_number', requirements.number);
+            updateRequirement('req_special', requirements.special);
+
+            // Calculate strength
+            const metRequirements = Object.values(requirements).filter(Boolean).length;
+            let strength = 0;
+            let strengthLabel = 'Weak';
+            let strengthColor = '#dc3545';
+
+            if (metRequirements === 5) {
+                strength = 100;
+                strengthLabel = 'Very Strong';
+                strengthColor = '#28a745';
+            } else if (metRequirements === 4) {
+                strength = 75;
+                strengthLabel = 'Strong';
+                strengthColor = '#5cb85c';
+            } else if (metRequirements === 3) {
+                strength = 50;
+                strengthLabel = 'Medium';
+                strengthColor = '#ffc107';
+            } else if (metRequirements === 2) {
+                strength = 25;
+                strengthLabel = 'Weak';
+                strengthColor = '#ff6b6b';
+            }
+
+            strengthBar.style.width = strength + '%';
+            strengthBar.style.background = strengthColor;
+            strengthText.textContent = strengthLabel;
+            strengthText.style.color = strengthColor;
+
+            checkPasswordMatch();
+            validateForm();
+        }
+
+        function updateRequirement(id, met) {
+            const element = document.getElementById(id);
+            if (met) {
+                element.style.color = '#28a745';
+                element.innerHTML = element.innerHTML.replace('bi-x-circle', 'bi-check-circle');
+            } else {
+                element.style.color = '#dc3545';
+                element.innerHTML = element.innerHTML.replace('bi-check-circle', 'bi-x-circle');
+            }
+        }
+
+        function checkPasswordMatch() {
+            const password = document.getElementById('encryption_password').value;
+            const confirm = document.getElementById('encryption_password_confirm').value;
+            const message = document.getElementById('passwordMatchMessage');
+
+            if (confirm.length === 0) {
+                message.style.display = 'none';
+                validateForm();
+                return;
+            }
+
+            message.style.display = 'block';
+
+            if (password === confirm) {
+                message.textContent = '✓ Passwords match';
+                message.style.color = '#28a745';
+            } else {
+                message.textContent = '✗ Passwords do not match';
+                message.style.color = '#dc3545';
+            }
+
+            validateForm();
+        }
+
+        function togglePasswordVisibility(fieldId) {
+            const field = document.getElementById(fieldId);
+            const icon = document.getElementById(fieldId + '_icon');
+
+            if (field.type === 'password') {
+                field.type = 'text';
+                icon.classList.remove('bi-eye');
+                icon.classList.add('bi-eye-slash');
+            } else {
+                field.type = 'password';
+                icon.classList.remove('bi-eye-slash');
+                icon.classList.add('bi-eye');
+            }
+        }
+
+        function validateForm() {
+            const password = document.getElementById('encryption_password').value;
+            const confirm = document.getElementById('encryption_password_confirm').value;
+            const submitBtn = document.getElementById('submitBtn');
+
+            // Check all requirements
+            const requirements = {
+                length: password.length >= 12,
+                uppercase: /[A-Z]/.test(password),
+                lowercase: /[a-z]/.test(password),
+                number: /[0-9]/.test(password),
+                special: /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)
+            };
+
+            const allRequirementsMet = Object.values(requirements).every(Boolean);
+            const passwordsMatch = password === confirm && confirm.length > 0;
+
+            if (allRequirementsMet && passwordsMatch) {
+                submitBtn.disabled = false;
+                submitBtn.style.opacity = '1';
+                submitBtn.style.cursor = 'pointer';
+            } else {
+                submitBtn.disabled = true;
+                submitBtn.style.opacity = '0.6';
+                submitBtn.style.cursor = 'not-allowed';
+            }
+        }
+
+        // Progressive activation functions
+        function validateSource() {
+            const dbType = document.querySelector('input[name="source_db_type"]:checked');
+            const host = document.getElementById('source_host').value.trim();
+            const port = document.getElementById('source_port').value.trim();
+            const username = document.getElementById('source_username').value.trim();
+            const database = document.getElementById('source_database').value.trim();
+
+            if (!dbType) return false;
+
+            if (dbType.value === 'sqlite') {
+                return database !== '';
+            } else {
+                return host !== '' && port !== '' && username !== '' && database !== '';
+            }
+        }
+
+        function validateEncrypted() {
+            const dbType = document.querySelector('input[name="encrypted_db_type"]:checked');
+            const host = document.getElementById('encrypted_host').value.trim();
+            const port = document.getElementById('encrypted_port').value.trim();
+            const username = document.getElementById('encrypted_username').value.trim();
+            const database = document.getElementById('encrypted_database').value.trim();
+
+            if (!dbType) return false;
+
+            if (dbType.value === 'sqlite') {
+                return database !== '';
+            } else {
+                return host !== '' && port !== '' && username !== '' && database !== '';
+            }
+        }
+
+        function validatePassword() {
+            const password = document.getElementById('encryption_password').value;
+            const confirm = document.getElementById('encryption_password_confirm').value;
+            const requirements = {
+                length: password.length >= 12,
+                uppercase: /[A-Z]/.test(password),
+                lowercase: /[a-z]/.test(password),
+                number: /[0-9]/.test(password),
+                special: /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)
+            };
+            const allMet = Object.values(requirements).every(Boolean);
+            return allMet && password === confirm;
+        }
+
+        function updateProgress() {
+            const sourceCard = document.getElementById('sourceCard');
+            const encryptedCard = document.getElementById('encryptedCard');
+            const passwordCard = document.getElementById('passwordCard');
+            const step1 = document.getElementById('step1');
+            const step2 = document.getElementById('step2');
+            const step3 = document.getElementById('step3');
+            const submitBtn = document.getElementById('submitBtn');
+
+            if (validateSource()) {
+                sourceCard.classList.remove('card-active');
+                sourceCard.classList.add('card-completed');
+                step1.classList.remove('active');
+                step1.classList.add('completed');
+                encryptedCard.classList.remove('card-disabled');
+                encryptedCard.classList.add('card-active');
+                step2.classList.remove('disabled');
+                step2.classList.add('active');
+            }
+
+            if (validateEncrypted()) {
+                encryptedCard.classList.remove('card-active');
+                encryptedCard.classList.add('card-completed');
+                step2.classList.remove('active');
+                step2.classList.add('completed');
+                passwordCard.classList.remove('card-disabled');
+                passwordCard.classList.add('card-active');
+                step3.classList.remove('disabled');
+                step3.classList.add('active');
+            }
+
+            if (validatePassword()) {
+                passwordCard.classList.remove('card-active');
+                passwordCard.classList.add('card-completed');
+                step3.classList.remove('active');
+                step3.classList.add('completed');
+                submitBtn.disabled = false;
+                submitBtn.style.opacity = '1';
+                submitBtn.style.cursor = 'pointer';
+            } else {
+                submitBtn.disabled = true;
+                submitBtn.style.opacity = '0.6';
+                submitBtn.style.cursor = 'not-allowed';
+            }
+        }
+    </script>
+</body>
+
+</html>

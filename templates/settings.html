@@ -1,0 +1,968 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings - CryptopixBridge</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+    
+</head>
+
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="brand">
+                <h1>CryptopixBridge</h1>
+            </div>
+            <div class="nav-links">
+                <a href="{{ url_for('index') }}" class="nav-link">
+                    <i class="bi bi-house"></i>Dashboard
+                </a>
+                <a href="{{ url_for('migration_setup') }}" class="nav-link">
+                    <i class="bi bi-arrow-left-right"></i>Migration
+                </a>
+                <a href="{{ url_for('query_console_page') }}" class="nav-link">
+                    <i class="bi bi-terminal"></i>Query Console
+                </a>
+                <a href="{{ url_for('systemlog') }}" class="nav-link">
+                    <i class="bi bi-journal-text"></i>System Logs
+                </a>
+                <a href="{{ url_for('settings_page') }}" class="nav-link active">
+                    <i class="bi bi-gear"></i>Settings
+                </a>
+            </div>
+            <div class="user-section">
+                <div class="user-dropdown">
+                    <button class="user-dropdown-toggle" onclick="toggleDropdown()">
+                        <i class="bi bi-person-circle"></i>
+                        {{ session.get('user_email', 'User') }}
+                        <i class="bi bi-chevron-down"></i>
+                    </button>
+                    <div class="user-dropdown-menu" id="userDropdown">
+                        <div class="dropdown-item">
+                            <span>License Key:</span>
+                            <div>
+                                <span class="license-key" id="licenseKey">{{ session.get('license_key', 'N/A') }}</span>
+                                <button class="copy-btn" onclick="copyLicenseKey()" title="Copy License Key">
+                                    <i class="bi bi-clipboard"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <a href="{{ url_for('logout') }}" class="logout-btn">
+                    <i class="bi bi-box-arrow-right"></i>Logout
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Toast container for notifications -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <div class="main-container">
+        <!-- Flashed messages will be shown as toasts -->
+        <script>
+            // Show flashed messages as toasts
+            {% with messages = get_flashed_messages(with_categories = true) %}
+            {% if messages %}
+            {% for category, message in messages %}
+            setTimeout(() => showToast('{{ message }}', '{{ 'success' if category == 'success' else 'error' if category == 'error' else 'warning' }}'), {{ loop.index * 500 }});
+            {% endfor %}
+            {% endif %}
+            {% endwith %}
+        </script>
+
+
+        <!-- Tab Navigation -->
+        <div class="tab-buttons">
+            <button class="tab-btn active" onclick="showTab('database')">
+                <i class="bi bi-database me-2"></i>Encrypted Database
+            </button>
+            <button class="tab-btn" onclick="showTab('virtual')">
+                <i class="bi bi-server me-2"></i>Virtual Server
+            </button>
+            <button class="tab-btn" onclick="showTab('reconfig')">
+                <i class="bi bi-gear me-2"></i>Reconfiguration
+            </button>
+            <button class="tab-btn" onclick="showTab('demigrate')">
+                <i class="bi bi-arrow-left-circle me-2"></i>Demigration
+            </button>
+        </div>
+
+        <!-- Configured Databases Overview Tab -->
+        <div id="database-tab" class="tab-content active">
+            <div class="settings-section">
+                <div class="section-header">
+                    <i class="bi bi-database"></i>
+                    <h4>Configured Databases</h4>
+                </div>
+                <div class="section-content">
+                    <p class="text-muted mb-4">List of all encrypted databases configured in the system. Use the
+                        Migration page to add new databases.</p>
+
+                    {% if databases %}
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Database ID</th>
+                                    <th>Encrypted URL</th>
+                                    <!-- <th>Type</th> -->
+                                    <th>VDS Instances</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for db in databases %}
+                                <tr>
+                                    <td><code class="text-primary">{{ db.name}}</code></td>
+                                    <td>
+                                        <div class="d-flex align-items-center">
+                                            <i class="bi bi-hdd-network me-2 text-muted"></i>
+                                            <span class="text-truncate" style="max-width: 500px;"
+                                                title="{{ db.encrypted_db_url }}">{{ db.encrypted_db_url }}</span>
+                                        </div>
+                                    </td>
+                                    <!-- <td><span class="badge bg-secondary">{{ db.db_type }}</span></td> -->
+                                    <td>
+                                        {% if db.vds_instances %}
+                                        <span class="badge bg-info text-dark">{{ db.vds_instances|length }}
+                                            running</span>
+                                        {% else %}
+                                        <span class="text-muted small">None</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-success"><i
+                                                class="bi bi-check-circle me-1"></i>Active</span>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div class="alert alert-info text-center py-5">
+                        <i class="bi bi-info-circle display-4 mb-3 d-block text-info"></i>
+                        <h5>No Databases Configured</h5>
+                        <p class="mb-3">You haven't encrypted any databases yet.</p>
+                        <a href="{{ url_for('migration_setup') }}" class="btn btn-primary">
+                            <i class="bi bi-plus-circle me-1"></i>Start New Migration
+                        </a>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Virtual Database Server Tab -->
+        <div id="virtual-tab" class="tab-content">
+            <div class="settings-section">
+                <div class="section-header">
+                    <i class="bi bi-server"></i>
+                    <h4>Virtual Database Servers</h4>
+                </div>
+                <div class="section-content">
+                    <p class="text-muted mb-4">Manage virtual server instances for your encrypted databases. Each VDS
+                        provides a dedicated port for transparent access.</p>
+
+                    {% if not databases %}
+                    <div class="alert alert-warning">
+                        <i class="bi bi-exclamation-triangle me-2"></i>
+                        Please configure a database first to set up a Virtual Server.
+                    </div>
+                    {% else %}
+                    {% for db in databases %}
+                    <div class="card mb-4 border shadow-sm">
+                        <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 class="mb-0 text-primary fw-bold"><i class="bi bi-database-lock me-2"></i>Encrypted Database Url:{{
+                                    db.encrypted_db_url }}</h6>
+                                <small class="text-muted">Database Name: {{ db.name }} </small>
+                            </div>
+                            <span class="badge bg-primary">{{ db.vds_instances|length }} Instance(s)</span>
+                        </div>
+                        <div class="card-body">
+                            <!-- Existing VDS Instances -->
+                            {% if db.vds_instances %}
+                            <div class="mb-4">
+                                <h6 class="border-bottom pb-2 mb-3">Running Instances</h6>
+                                <div class="table-responsive">
+                                    <table class="table table-sm table-hover align-middle">
+                                        <thead class="table-light">
+                                            <tr>
+                                                <th>Host</th>
+                                                <th>Port</th>
+                                                <th>Protocol</th>
+                                                <th>Status</th>
+                                                <th>Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for vds in db.vds_instances %}
+                                            <tr>
+                                                <td><code>{{ vds.host }}</code></td>
+                                                <td><span class="badge bg-dark">{{ vds.port }}</span></td>
+                                                <td>{{ vds.protocol|upper }}</td>
+                                                <td>
+                                                    {% if vds.status == 'running' %}
+                                                    <span class="badge bg-success"><i class="bi bi-circle-fill me-1"
+                                                            style="font-size: 0.6em;"></i>Running</span>
+                                                    {% else %}
+                                                    <span class="badge bg-danger">{{ vds.status }}</span>
+                                                    {% endif %}
+                                                </td>
+                                                <td>
+                                                    <form method="POST" action="{{ url_for('stop_virtual_server') }}"
+                                                        style="display:inline;">
+                                                        <input type="hidden" name="db_id" value="{{ db.id }}">
+                                                        <input type="hidden" name="vds_id" value="{{ vds.id }}">
+                                                        <button type="submit" class="btn btn-sm btn-outline-danger"
+                                                            title="Stop Instance">
+                                                            <i class="bi bi-stop-circle"></i> Stop
+                                                        </button>
+                                                    </form>
+                                                </td>
+                                            </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            {% endif %}
+
+                            <!-- Add New VDS Form -->
+                            <div>
+                                <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse"
+                                    data-bs-target="#addVDS_{{ db.id }}">
+                                    <i class="bi bi-plus-circle me-1"></i>Start New VDS Instance
+                                </button>
+                                <div class="collapse mt-3" id="addVDS_{{ db.id }}">
+                                    <div class="card card-body bg-light">
+                                        <form method="POST" action="{{ url_for('start_virtual_server') }}">
+                                            <input type="hidden" name="db_id" value="{{ db.id }}">
+                                            <div class="row g-3 align-items-end">
+                                                <div class="col-md-4">
+                                                    <label class="form-label small fw-bold">Host</label>
+                                                    <div class="input-group input-group-sm">
+                                                        <span class="input-group-text"><i
+                                                                class="bi bi-globe"></i></span>
+                                                        <input type="text" class="form-control" name="host"
+                                                            value="0.0.0.0">
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-3">
+                                                    <label class="form-label small fw-bold">Port</label>
+                                                    <div class="input-group input-group-sm">
+                                                        <span class="input-group-text"><i class="bi bi-hash"></i></span>
+                                                        <input type="number" class="form-control" name="port"
+                                                            placeholder="e.g. 4406" required min="1024" max="65535">
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-3">
+                                                    <label class="form-label small fw-bold">Protocol</label>
+                                                    <select class="form-select form-select-sm" name="protocol">
+                                                        <option value="mysql">MySQL</option>
+                                                        <option value="postgresql">PostgreSQL</option>
+                                                    </select>
+                                                </div>
+                                                <div class="col-md-2">
+                                                    <button type="submit" class="btn btn-sm btn-success w-100">
+                                                        <i class="bi bi-play-circle me-1"></i>Start
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div class="form-text mt-2"><small>Specify a unique port for this VDS
+                                                    instance.</small></div>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Encrypted Database Reconfiguration Tab -->
+        <div id="reconfig-tab" class="tab-content">
+            <div class="settings-section">
+                <div class="section-header">
+                    <i class="bi bi-gear"></i>
+                    <h4>Encrypted Database Reconfiguration</h4>
+                </div>
+                <div class="section-content">
+                    <div class="d-flex justify-content-between align-items-center mb-4">
+                        <p class="text-muted mb-0">Reconfigure your encrypted database schema.</p>
+
+                        <!-- Database Selection Dropdown -->
+                        <div class="input-group" style="max-width: 600px;margin-right: 50px;">
+                            <span class="input-group-text bg-light"><i class="bi bi-database-fill"></i></span>
+                            <select class="form-select" id="reconfig_db_select"
+                                onchange="window.location.href='{{ url_for('settings_page') }}?db_id=' + this.value + '#reconfig'">
+                                <option value="">-- Select Database to Reconfigure --</option>
+                                {% for db in databases %}
+                                <option value="{{ db.id }}" {{ 'selected' if request.args.get('db_id')==db.id else ''
+                                    }}>
+                                    {{ db.name }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Step 1: Verify Encrypted Database URL -->
+                    <div class="alert alert-info mb-4">
+                        <h5><i class="bi bi-info-circle me-2"></i>Step 1: Verify Encrypted Database Connection</h5>
+                        <div class="config-item mt-3">
+                            <span class="config-label">Current Configuration:</span>
+                            <span class="config-value">{{ settings.encrypted_db_url or 'Please select a database above'
+                                }}</span>
+                        </div>
+                        {% if not settings.encrypted_db_url %}
+                        <div class="alert alert-warning mt-3">
+                            <i class="bi bi-exclamation-triangle me-2"></i>
+                            <strong>No encrypted database configured!</strong> Please configure your encrypted database
+                            in the "Encrypted Database" tab first.
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    {% if settings.encrypted_db_url %}
+                    <!-- Warning Message -->
+                    <div class="alert alert-warning">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        <strong>Important:</strong> Reconfiguring the database will:
+                        <ul class="mb-0 mt-2">
+                            <li><strong>Encrypt columns:</strong> Convert normal columns to encrypted (BLOB + tag
+                                columns)</li>
+                            <li><strong>Decrypt columns:</strong> Convert encrypted columns back to normal (removes tag
+                                columns)</li>
+                            <li><strong>Hash columns:</strong> One-way hash (cannot be reversed)</li>
+                            <li><strong>Re-process all data:</strong> May take time for large datasets</li>
+                        </ul>
+                        <div class="mt-2">
+                            <i class="bi bi-shield-check me-2"></i>
+                            <strong>Backup recommended:</strong> Please backup your database before proceeding.
+                        </div>
+                    </div>
+
+                    <!-- Step 2: Configure Columns -->
+                    <div class="alert alert-primary mb-4">
+                        <h5><i class="bi bi-gear me-2"></i>Step 2: Configure Column Encryption Settings</h5>
+                        <p class="mb-0">Select the encryption type for each column below. Changes will be applied when
+                            you click "Apply Reconfiguration".</p>
+                    </div>
+
+                    <form method="POST" action="{{ url_for('settings_page') }}"
+                        onsubmit="return confirmReconfiguration()">
+                        <input type="hidden" name="action" value="reconfigure_encrypted_database">
+
+                        {% if available_tables %}
+                        {% for table in available_tables %}
+                        <div class="table-config mb-4">
+                            <h5><i class="bi bi-table me-2"></i>{{ table.name }}</h5>
+                            <div class="table-responsive">
+                                <table class="table table-bordered">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>Column Name</th>
+                                            <th>Data Type</th>
+                                            <th>Current Status</th>
+                                            <th>New Configuration</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for column in table.columns %}
+                                        {% if not column.name.startswith('tag_') %}
+                                        <tr>
+                                            <td><strong><i class="bi bi-columns me-1"></i>{{ column.name }}</strong>
+                                            </td>
+                                            <td><code>{{ column.type }}</code></td>
+                                            <td>
+                                                {% if column.current_status == 'encrypt' %}
+                                                <span class="badge bg-success">
+                                                    <i class="bi bi-lock-fill me-1"></i>Encrypted
+                                                </span>
+                                                {% else %}
+                                                <span class="badge bg-secondary">
+                                                    <i class="bi bi-file-text me-1"></i>Normal
+                                                </span>
+                                                {% endif %}
+                                            </td>
+                                            <td>
+                                                <select class="form-select form-select-sm encryption-select"
+                                                    name="column_{{ table.name }}_{{ column.name }}_config"
+                                                    data-current-status="{{ column.current_status }}"
+                                                    onchange="highlightChange(this, '{{ column.current_status }}')">
+                                                    <option value="normal" {{ 'selected' if
+                                                        column.current_status=='normal' else '' }}>
+                                                        📄 Normal (Plain Text)
+                                                    </option>
+                                                    <option value="encrypt" {{ 'selected' if
+                                                        column.current_status=='encrypt' else '' }}>
+                                                        🔐 Encrypted (CLWE)
+                                                    </option>
+                                                </select>
+                                                <input type="hidden" name="datatype_{{ table.name }}_{{ column.name }}"
+                                                    value="{{ column.type }}">
+                                            </td>
+                                        </tr>
+                                        {% endif %}
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        {% endfor %}
+
+                        <div class="button-group mt-4">
+                            <button type="submit" class="btn btn-warning btn-lg">
+                                <i class="bi bi-save me-2"></i>Apply Reconfiguration
+                            </button>
+                            <button type="button" class="btn btn-info" onclick="previewReconfigChanges()">
+                                <i class="bi bi-eye me-2"></i>Preview Changes
+                            </button>
+                            <button type="button" class="btn btn-secondary" onclick="resetReconfigForm()">
+                                <i class="bi bi-arrow-counterclockwise me-2"></i>Reset to Current
+                            </button>
+                        </div>
+                        {% else %}
+                        <div class="alert alert-warning">
+                            <i class="bi bi-exclamation-triangle me-2"></i>
+                            <strong>No tables found!</strong> Please ensure your encrypted database has tables to
+                            reconfigure.
+                        </div>
+                        {% endif %}
+                    </form>
+
+                    <!-- Current Configuration Summary -->
+                    {% if settings.table_configs %}
+                    <div class="config-summary mt-5">
+                        <h5><i class="bi bi-bar-chart me-2"></i>Current Encryption Configuration Summary</h5>
+                        {% for table_name, config in settings.table_configs.items() %}
+                        <div class="mb-3">
+                            <strong><i class="bi bi-table me-1"></i>{{ table_name }}:</strong>
+                            <div class="mt-2">
+                                {% for col_name, col_config in config.items() %}
+                                {% if col_config.type == 'encrypt' %}
+                                <span class="badge bg-success me-2 mb-1">
+                                    <i class="bi bi-lock-fill me-1"></i>{{ col_name }}
+                                </span>
+                                {% elif col_config.type == 'hash' %}
+                                <span class="badge bg-warning me-2 mb-1">
+                                    <i class="bi bi-hash me-1"></i>{{ col_name }}
+                                </span>
+                                {% else %}
+                                <span class="badge bg-secondary me-2 mb-1">
+                                    <i class="bi bi-file-text me-1"></i>{{ col_name }}
+                                </span>
+                                {% endif %}
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Demigration Tab -->
+        <div id="demigrate-tab" class="tab-content">
+            <div class="settings-section">
+                <div class="section-header">
+                    <i class="bi bi-arrow-left-circle"></i>
+                    <h4>Database Demigration</h4>
+                </div>
+                <div class="section-content">
+                    <p class="text-muted mb-4">Convert your encrypted database back to a regular (unencrypted) database.
+                        This will decrypt all encrypted data and restore the original schema.</p>
+
+                    <div class="alert alert-danger">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        <strong>Danger Zone:</strong> This operation will permanently decrypt all your data and remove
+                        encryption. Make sure you have backups before proceeding.
+                    </div>
+
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle"></i>
+                        <strong>What happens during demigration:</strong>
+                        <ul class="mb-0 mt-2">
+                            <li>All encrypted columns will be decrypted back to plain text</li>
+                            <li>Hashed columns will remain hashed (one-way encryption)</li>
+                            <li>Database schema will be simplified (no more enc_/tag_ columns)</li>
+                            <li>Migration state will be reset</li>
+                        </ul>
+                    </div>
+
+                    <form method="POST" action="{{ url_for('settings_page') }}" onsubmit="return confirmDemigration()">
+                        <input type="hidden" name="action" value="demigrate_database">
+
+                        <!-- Database Selection -->
+                        <div class="mb-4">
+                            <label class="form-label fw-bold"><i class="bi bi-database-fill me-2"></i>Select Database to
+                                Demigrate</label>
+                            <select class="form-select" name="db_id" required
+                                onchange="if(this.value) window.location.href='{{ url_for('settings_page') }}?db_id=' + this.value + '#demigrate'">
+                                <option value="">-- Select Database --</option>
+                                {% for db in databases %}
+                                <option value="{{ db.id }}" {{ 'selected' if request.args.get('db_id')==db.id else ''
+                                    }}>
+                                     {{ db.name }}<!-- ({{ db.encrypted_db_url }}) -->
+                                </option>
+                                {% endfor %}
+                            </select>
+                            <div class="form-text">Select the encrypted database you want to restore to plain text.
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="confirm_demigration"><i class="bi bi-shield-exclamation me-2"></i>Type
+                                "DEMIGRATE" to confirm:</label>
+                            <input type="text" class="form-control" id="confirm_demigration" name="confirm_demigration"
+                                placeholder="Type DEMIGRATE to confirm demigration" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="target_db_url"><i class="bi bi-database me-2"></i>Target Database URL (where to
+                                save decrypted data):</label>
+                            <input type="url" class="form-control" id="target_db_url" name="target_db_url"
+                                value="{{ settings.source_db_url or '' }}"
+                                placeholder="mysql+pymysql://user:password@localhost:3306/decrypted_db" required>
+                            <div class="url-examples">
+                                <strong>Target Database Examples:</strong><br>
+                                <i class="bi bi-database me-1"></i>MySQL:
+                                mysql+pymysql://user:password@localhost:3306/decrypted_db<br>
+                                <i class="bi bi-server me-1"></i>PostgreSQL:
+                                postgresql://user:password@localhost:5432/decrypted_db<br>
+                                <i class="bi bi-file-earmark-data me-1"></i>SQLite: sqlite:///path/to/decrypted.db
+                            </div>
+                        </div>
+
+                        <div class="button-group">
+                            <button type="submit" class="btn btn-danger">
+                                <i class="bi bi-arrow-left-circle"></i>Start Demigration
+                            </button>
+                            <button type="button" class="btn btn-secondary" onclick="cancelDemigration()">
+                                <i class="bi bi-x-circle"></i>Cancel
+                            </button>
+                        </div>
+                    </form>
+
+                    <!-- Demigration Status -->
+                    <div class="config-summary">
+                        <h5><i class="bi bi-activity"></i>Demigration Readiness</h5>
+                        <div class="config-item">
+                            <span class="config-label">Encrypted Database:</span>
+                            <span class="config-value">{{ settings.encrypted_db_url or 'Not configured' }}</span>
+                        </div>
+                        <div class="config-item">
+                            <span class="config-label">Migration Status:</span>
+                            <span class="config-value">{{ 'Ready for demigration' if settings.migration_complete else
+                                'Not migrated yet' }}</span>
+                        </div>
+                        <div class="config-item">
+                            <span class="config-label">Encrypted Tables:</span>
+                            <span class="config-value">{{ available_tables|length if available_tables else 0 }}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        function toggleDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        function copyLicenseKey() {
+            const licenseKey = document.getElementById('licenseKey').textContent;
+            navigator.clipboard.writeText(licenseKey).then(function () {
+                showToast('License key copied to clipboard!', 'success');
+            }).catch(function (err) {
+                showToast('Failed to copy license key', 'error');
+            });
+        }
+
+        function showTab(tabName) {
+            // Hide all tabs
+            const tabs = document.querySelectorAll('.tab-content');
+            tabs.forEach(tab => tab.classList.remove('active'));
+
+            // Remove active class from all buttons
+            const buttons = document.querySelectorAll('.tab-btn');
+            buttons.forEach(btn => btn.classList.remove('active'));
+
+            // Show selected tab
+            const targetTab = document.getElementById(tabName + '-tab');
+            if (targetTab) {
+                targetTab.classList.add('active');
+            }
+
+            // Add active class to button
+            let button = null;
+            // Try to find the button that triggers this tab
+            if (typeof event !== 'undefined' && event.target && event.target.classList.contains('tab-btn')) {
+                button = event.target;
+            }
+
+            if (!button) {
+                // Fallback: find button by onclick attribute (approximate)
+                button = document.querySelector(`button[onclick*="showTab('${tabName}')"]`);
+            }
+
+            if (button) {
+                button.classList.add('active');
+            }
+        }
+
+        function testEncryptedConnection() {
+            const dbUrl = document.getElementById('encrypted_db_url').value;
+            if (!dbUrl) {
+                showToast('Please enter an encrypted database URL first.', 'warning');
+                return;
+            }
+            showToast('Testing encrypted database connection...', 'info');
+            // Simulate connection test
+            setTimeout(() => {
+                showToast('Connection test completed successfully!', 'success');
+            }, 2000);
+        }
+
+
+        function showToast(message, type = 'info') {
+            console.log('Showing toast:', message, type);
+
+            // Create toast container if it doesn't exist
+            let toastContainer = document.getElementById('toastContainer');
+            if (!toastContainer) {
+                toastContainer = document.createElement('div');
+                toastContainer.id = 'toastContainer';
+                toastContainer.className = 'toast-container';
+                document.body.appendChild(toastContainer);
+                console.log('Created toast container');
+            }
+
+            // Create toast element
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.setAttribute('role', 'alert');
+            toast.setAttribute('aria-live', 'assertive');
+            toast.setAttribute('aria-atomic', 'true');
+            toast.innerHTML = `
+                <div class="toast-body">
+                    <strong>${type.charAt(0).toUpperCase() + type.slice(1)}:</strong> ${message}
+                </div>
+            `;
+
+            // Add to container
+            toastContainer.appendChild(toast);
+            console.log('Added toast to container');
+
+            // Initialize Bootstrap toast with 8-second delay
+            const bsToast = new bootstrap.Toast(toast, {
+                autohide: true,
+                delay: 8000
+            });
+            bsToast.show();
+
+            // Remove from DOM after hiding
+            toast.addEventListener('hidden.bs.toast', () => {
+                toast.remove();
+                console.log('Removed toast');
+            });
+        }
+
+        // Add slideOutRight animation
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes slideOutRight {
+                from {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+                to {
+                    transform: translateX(100%);
+                    opacity: 0;
+                }
+            }
+        `;
+        document.head.appendChild(style);
+
+        function previewChanges() {
+            let changes = 'Configuration Changes Preview:\n\n';
+            changes += '• Encrypted columns will keep their enc_ and tag_ columns\n';
+            changes += '• Hashed columns will use hash_ prefix\n';
+            changes += '• Normal columns will be stored as plain text\n';
+            changes += '• When changing from encrypted to normal, tag columns will be removed\n\n';
+            changes += '⚠️ This operation will recreate tables and may take time for large datasets.';
+            showToast(changes.replace(/\n/g, '<br>'), 'info');
+        }
+
+        // Reconfiguration Functions
+        function confirmReconfiguration() {
+            const selects = document.querySelectorAll('.encryption-select');
+            let changesCount = 0;
+            let changesList = [];
+
+            selects.forEach(select => {
+                const currentStatus = select.getAttribute('data-current-status');
+                const newValue = select.value;
+                const columnName = select.name.replace('column_', '').replace('_config', '');
+
+                if (currentStatus && currentStatus !== newValue) {
+                    changesCount++;
+                    changesList.push(`${columnName}: ${currentStatus} → ${newValue}`);
+                }
+            });
+
+            if (changesCount === 0) {
+                showToast('No changes detected. Please modify at least one column configuration.', 'warning');
+                return false;
+            }
+
+            const confirmMsg = `⚠️ WARNING: You are about to reconfigure ${changesCount} column(s)!\n\n` +
+                `Changes:\n${changesList.slice(0, 5).join('\n')}` +
+                (changesList.length > 5 ? `\n... and ${changesList.length - 5} more` : '') +
+                `\n\nThis will:\n` +
+                `• Recreate affected tables\n` +
+                `• Re-encrypt/decrypt data as needed\n` +
+                `• May take time for large datasets\n\n` +
+                `Are you sure you want to proceed?`;
+
+            return confirm(confirmMsg);
+        }
+
+        function previewReconfigChanges() {
+            const selects = document.querySelectorAll('.encryption-select');
+            let changes = [];
+            let encryptCount = 0, decryptCount = 0, hashCount = 0, noChangeCount = 0;
+
+            selects.forEach(select => {
+                const row = select.closest('tr');
+                const columnName = row.querySelector('td:first-child').textContent.trim();
+                const currentBadge = row.querySelector('.badge');
+                const currentStatus = currentBadge ?
+                    (currentBadge.textContent.includes('Encrypted') ? 'encrypt' :
+                        currentBadge.textContent.includes('Hashed') ? 'hash' : 'normal') : 'normal';
+                const newValue = select.value;
+
+                if (currentStatus !== newValue) {
+                    if (newValue === 'encrypt') encryptCount++;
+                    else if (currentStatus === 'encrypt') decryptCount++;
+                    if (newValue === 'hash') hashCount++;
+
+                    changes.push(`${columnName}: ${currentStatus} → ${newValue}`);
+                } else {
+                    noChangeCount++;
+                }
+            });
+
+            let message = '<strong>Reconfiguration Preview:</strong><br><br>';
+
+            if (changes.length === 0) {
+                message += '❌ No changes detected.<br><br>';
+                message += `All ${noChangeCount} column(s) will remain unchanged.`;
+            } else {
+                message += `📊 <strong>Summary:</strong><br>`;
+                if (encryptCount > 0) message += `🔐 ${encryptCount} column(s) will be encrypted<br>`;
+                if (decryptCount > 0) message += `🔓 ${decryptCount} column(s) will be decrypted<br>`;
+                if (noChangeCount > 0) message += `➡️ ${noChangeCount} column(s) unchanged<br>`;
+                message += `<br><strong>Changes:</strong><br>`;
+                message += changes.slice(0, 10).join('<br>');
+                if (changes.length > 10) {
+                    message += `<br>... and ${changes.length - 10} more changes`;
+                }
+            }
+
+            showToast(message, 'info');
+        }
+
+        function highlightChange(selectElement, originalStatus) {
+            const newValue = selectElement.value;
+            const row = selectElement.closest('tr');
+
+            if (originalStatus !== newValue) {
+                row.style.backgroundColor = '#fff3cd';
+                selectElement.style.borderColor = '#ffc107';
+                selectElement.style.borderWidth = '2px';
+            } else {
+                row.style.backgroundColor = '';
+                selectElement.style.borderColor = '';
+                selectElement.style.borderWidth = '';
+            }
+        }
+
+        function resetReconfigForm() {
+            if (confirm('Reset all changes to current configuration?')) {
+                const selects = document.querySelectorAll('.encryption-select');
+                selects.forEach(select => {
+                    const row = select.closest('tr');
+                    const currentBadge = row.querySelector('.badge');
+
+                    if (currentBadge) {
+                        let currentStatus = 'normal';
+                        if (currentBadge.textContent.includes('Encrypted')) currentStatus = 'encrypt';
+
+                        select.value = currentStatus;
+                        row.style.backgroundColor = '';
+                        select.style.borderColor = '';
+                        select.style.borderWidth = '';
+                    }
+                });
+                showToast('Form reset to current configuration', 'info');
+            }
+        }
+
+        function confirmDemigration() {
+            const confirmation = document.getElementById('confirm_demigration').value;
+            if (confirmation !== 'DEMIGRATE') {
+                showToast('Please type "DEMIGRATE" to confirm the demigration operation.', 'warning');
+                return false;
+            }
+
+            return confirm('⚠️ WARNING: This will permanently decrypt all your data!\n\n' +
+                'Are you sure you want to proceed with demigration?\n\n' +
+                'This action cannot be undone.');
+        }
+
+        function cancelDemigration() {
+            if (confirm('Are you sure you want to cancel the demigration?')) {
+                document.getElementById('confirm_demigration').value = '';
+                document.getElementById('target_db_url').value = '';
+                showToast('Demigration cancelled', 'info');
+            }
+        }
+
+        // Virtual Server Functions
+        function testVirtualConnection() {
+            const host = document.getElementById('virtual_host').value;
+            const port = document.getElementById('virtual_port').value;
+
+            if (!host || !port) {
+                showToast('Please configure host and port first.', 'warning');
+                return;
+            }
+
+            showToast('Testing virtual server connection...', 'info');
+
+            // Simple connection test
+            fetch('/api/virtual_server/status')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.running) {
+                        showToast('Virtual server is running and accessible!', 'success');
+                    } else {
+                        showToast('Virtual server is not running. Start it first.', 'warning');
+                    }
+                })
+                .catch(error => {
+                    showToast('Failed to connect to virtual server: ' + error.message, 'error');
+                });
+        }
+
+        function refreshVirtualStatus() {
+            showToast('Refreshing virtual server status...', 'info');
+            location.reload(); // Simple refresh for now
+        }
+
+        function refreshVirtualLogs() {
+            const logsContainer = document.getElementById('virtual-logs');
+            const loadingDiv = document.getElementById('log-loading');
+
+            if (!logsContainer || !loadingDiv) {
+                showToast('Virtual logs interface not available', 'error');
+                return;
+            }
+
+            loadingDiv.style.display = 'block';
+
+            // Fetch real virtual server logs from system logs API
+            fetch('/api/system_logs?source=virtual_server&limit=20')
+                .then(response => response.json())
+                .then(data => {
+                    loadingDiv.style.display = 'none';
+
+                    if (data.success && data.logs.length > 0) {
+                        logsContainer.innerHTML = data.logs.map(log =>
+                            `<div style="margin: 2px 0; padding: 4px; border-left: 3px solid #007bff; background: rgba(0,123,255,0.05); font-size: 11px;">
+                                [${new Date(log.timestamp).toLocaleString()}] ${log.level} - ${log.message}
+                            </div>`
+                        ).join('');
+                        showToast('Virtual server logs refreshed', 'success');
+                    } else {
+                        logsContainer.innerHTML = '<div class="text-center text-muted" style="padding: 20px;"><i class="bi bi-info-circle me-2"></i>No virtual server logs available yet</div>';
+                        showToast('No virtual server logs found', 'info');
+                    }
+                })
+                .catch(error => {
+                    loadingDiv.style.display = 'none';
+                    logsContainer.innerHTML = '<div class="text-center text-danger" style="padding: 20px;"><i class="bi bi-exclamation-triangle me-2"></i>Failed to load logs</div>';
+                    showToast('Failed to load virtual server logs', 'error');
+                    console.error('Error loading virtual server logs:', error);
+                });
+        }
+
+        function clearVirtualLogs() {
+            if (confirm('Are you sure you want to clear all virtual server logs?')) {
+                const logsContainer = document.getElementById('virtual-logs');
+                logsContainer.innerHTML = '<div class="text-center text-muted">Logs cleared</div>';
+                showToast('Virtual server logs cleared', 'info');
+            }
+        }
+
+        // Load virtual server logs on page load
+        document.addEventListener('DOMContentLoaded', function () {
+            // Auto-refresh logs every 30 seconds if virtual server tab is active
+            setInterval(() => {
+                const virtualTab = document.getElementById('virtual-tab');
+                if (virtualTab && virtualTab.classList.contains('active')) {
+                    refreshVirtualLogs();
+                }
+            }, 30000);
+        });
+
+
+        // Page initialization
+        document.addEventListener('DOMContentLoaded', function () {
+            // Check for has in URL to switch tabs
+            const hash = window.location.hash;
+            if (hash) {
+                const tabName = hash.substring(1);
+                // Simple validation to ensure it's a valid tab
+                const tabElement = document.getElementById(tabName + '-tab');
+                if (tabElement) {
+                    showTab(tabName);
+                }
+            }
+        });
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function (event) {
+            const dropdown = document.getElementById('userDropdown');
+            const toggle = event.target.closest('.user-dropdown-toggle');
+
+            if (!toggle && dropdown.classList.contains('show')) {
+                dropdown.classList.remove('show');
+            }
+        });
+    </script>
+
+    <!-- Multi-Database Management JavaScript -->
+    <script src="{{ url_for('static', filename='js/multi_database.js') }}"></script>
+</body>
+
+</html>

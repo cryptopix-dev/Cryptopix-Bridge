@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Migration Confirmation - CryptopixBridge</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="brand">
+                <h1>CryptopixBridge</h1>
+            </div>
+            <div class="nav-links">
+                <a href="{{ url_for('index') }}" class="nav-link">
+                    <i class="bi bi-house"></i>Dashboard
+                </a>
+                <a href="{{ url_for('migration_setup') }}" class="nav-link active">
+                    <i class="bi bi-arrow-left-right"></i>Migration
+                </a>
+                <a href="{{ url_for('query_console_page') }}" class="nav-link">
+                    <i class="bi bi-terminal"></i>Query Console
+                </a>
+                <a href="{{ url_for('systemlog') }}" class="nav-link">
+                    <i class="bi bi-journal-text"></i>System Logs
+                </a>
+                <a href="{{ url_for('settings_page') }}" class="nav-link">
+                    <i class="bi bi-gear"></i>Settings
+                </a>
+            </div>
+            <div class="user-section">
+                <div class="user-dropdown">
+                    <button class="user-dropdown-toggle" onclick="toggleDropdown()">
+                        <i class="bi bi-person-circle"></i>
+                        {{ session.get('user_email', 'User') }}
+                        <i class="bi bi-chevron-down"></i>
+                    </button>
+                    <div class="user-dropdown-menu" id="userDropdown">
+                        <div class="dropdown-item">
+                            <span>License Key:</span>
+                            <div>
+                                <span class="license-key" id="licenseKey">{{ session.get('license_key', 'N/A') }}</span>
+                                <button class="copy-btn" onclick="copyLicenseKey()" title="Copy License Key">
+                                    <i class="bi bi-clipboard"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <a href="{{ url_for('logout') }}" class="logout-btn">
+                    <i class="bi bi-box-arrow-right"></i>Logout
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <div class="main-container">
+        <div class="detail-card">
+            <div class="card-header">
+                <h5><i class="bi bi-check-circle me-2"></i>Migration Configuration Review</h5>
+            </div>
+            <div class="card-body">
+                <div class="warning">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <strong>Important:</strong> This action will migrate your data to an encrypted database. Make sure your configuration is correct before proceeding.
+                </div>
+
+                <div class="detail-card">
+                    <div class="card-header">
+                        <h5><i class="bi bi-database me-2"></i>Source Database</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="config-item">{{ source_url }}</div>
+                    </div>
+                </div>
+
+                <div class="detail-card">
+                    <div class="card-header">
+                        <h5><i class="bi bi-shield-lock me-2"></i>Encrypted Database</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="config-item">{{ encrypted_url }}</div>
+                    </div>
+                </div>
+
+                <div class="detail-card">
+                    <div class="card-header">
+                        <h5><i class="bi bi-table me-2"></i>Selected Tables</h5>
+                    </div>
+                    <div class="card-body">
+                        {% for table in selected_tables %}
+                        <div class="config-item">
+                            <strong>{{ table }}</strong>
+                            {% if table_configs[table] %}
+                            <div style="margin-top: 10px;">
+                                {% for col, config in table_configs[table].items() %}
+                                <span class="encryption-badge badge-{{ config.type }}">{{ col }}: {{ config.type }}</span>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <div class="button-group">
+                    <form method="POST" action="{{ url_for('start_migration') }}" style="display: inline;" id="migrationForm">
+                        <button type="submit" class="btn btn-primary" id="startMigrationBtn">
+                            <i class="bi bi-rocket-takeoff me-1"></i>Start Migration
+                        </button>
+                    </form>
+                    <button class="btn btn-info" onclick="downloadConfig()">
+                        <i class="bi bi-download me-1"></i>Download JSON
+                    </button>
+                    <a href="{{ url_for('configure_columns') }}" class="btn btn-outline-secondary">
+                        <i class="bi bi-arrow-left me-1"></i>Back to Configuration
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script id="config-data" type="application/json">
+        {
+            "source_database": "{{ source_url | tojson }}",
+            "encrypted_database": "{{ encrypted_url | tojson }}",
+            "selected_tables": [
+                {% for table in selected_tables %}
+                {
+                    "table": "{{ table | tojson }}",
+                    "columns": {
+                        {% for col, config in table_configs[table].items() %}
+                        "{{ col | tojson }}": "{{ config.type | tojson }}"{{ "," if not loop.last }}
+                        {% endfor %}
+                    }
+                }{{ "," if not loop.last }}
+                {% endfor %}
+            ]
+        }
+    </script>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        function toggleDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        function copyLicenseKey() {
+            const licenseKey = document.getElementById('licenseKey').textContent;
+            navigator.clipboard.writeText(licenseKey).then(function() {
+                showToast('License key copied to clipboard!', 'success');
+            }).catch(function(err) {
+                showToast('Failed to copy license key', 'error');
+            });
+        }
+
+        function showToast(message, type = 'info') {
+            const toastContainer = document.getElementById('toastContainer');
+            if (!toastContainer) return;
+
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.setAttribute('role', 'alert');
+            toast.setAttribute('aria-live', 'assertive');
+            toast.setAttribute('aria-atomic', 'true');
+            toast.innerHTML = `
+                <div class="toast-body">
+                    <strong>${type.charAt(0).toUpperCase() + type.slice(1)}:</strong> ${message}
+                </div>
+            `;
+
+            toastContainer.appendChild(toast);
+
+            // Initialize Bootstrap toast with 8-second delay
+            const bsToast = new bootstrap.Toast(toast, {
+                autohide: true,
+                delay: 8000
+            });
+            bsToast.show();
+
+            // Remove from DOM after hiding
+            toast.addEventListener('hidden.bs.toast', () => {
+                toast.remove();
+            });
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            // Remove any existing loading overlay
+            const existingOverlay = document.getElementById('loadingOverlay');
+            if (existingOverlay) {
+                existingOverlay.remove();
+            }
+        });
+
+        function downloadConfig() {
+            try {
+                const configData = document.getElementById('config-data').textContent;
+                const config = JSON.parse(configData);
+                const jsonString = JSON.stringify(config, null, 2);
+                const blob = new Blob([jsonString], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'migration_config.json';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                showToast('Configuration JSON downloaded successfully!', 'success');
+            } catch (error) {
+                showToast('Failed to download configuration: ' + error.message, 'error');
+            }
+        }
+
+        // Handle migration form submission
+        document.getElementById('migrationForm').addEventListener('submit', function(e) {
+            const btn = document.getElementById('startMigrationBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="bi bi-hourglass-split"></i>Migration in Progress...';
+
+            // Show loading toast
+            showToast('Migration started! Redirecting to progress page...', 'info');
+        });
+
+        document.addEventListener('click', function(event) {
+            const dropdown = document.getElementById('userDropdown');
+            const toggle = event.target.closest('.user-dropdown-toggle');
+
+            if (!toggle && dropdown.classList.contains('show')) {
+                dropdown.classList.remove('show');
+            }
+        });
+    </script>
+</body>
+</html>
