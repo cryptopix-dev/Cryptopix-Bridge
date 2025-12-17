@@ -70,11 +70,14 @@ class SQLTranslator:
         self.table_mappings: Dict[str, TableMapping] = {}
         self.database_type: Optional[str] = None
 
+        # Query translation cache for performance
         self.translation_cache: Dict[str, Tuple[str, Dict[str, Any]]] = {}
         self.cache_max_size = 1000  # Maximum cache entries
 
+        # Pre-compiled regex patterns for better performance
         self._compile_regex_patterns()
 
+        # Translation strategy tracking
         self.translation_strategies: Dict[str, str] = {}
 
     def _analyze_query_context(self, query: str, table_mapping: TableMapping) -> Dict[str, Any]:
@@ -97,43 +100,53 @@ class SQLTranslator:
 
         query_upper = query.upper()
 
+        # Analyze SELECT clause - if encrypted columns are selected for display, decryption is needed
         if 'SELECT' in query_upper:
             select_match = re.search(r'SELECT\s+(.+?)\s+FROM', query, re.IGNORECASE | re.DOTALL)
             if select_match:
                 select_clause = select_match.group(1)
                 if select_clause.strip() == '*':
+                    # SELECT * means all columns will be displayed - decryption needed
                     context['needs_decryption'] = True
                 else:
+                    # Check if any encrypted columns are explicitly selected
                     for col_name, col_mapping in table_mapping.encrypted_columns.items():
                         if col_mapping.is_encrypted:
                             if col_name in select_clause or f'{col_name},' in select_clause:
                                 context['needs_decryption'] = True
                                 break
 
+        # Analyze WHERE clause - filtering/searching needs tags
         if 'WHERE' in query_upper:
             context['needs_tags'] = True
             for col_name, col_mapping in table_mapping.encrypted_columns.items():
                 if col_mapping.is_encrypted and col_mapping.tag_name:
+                    # Check if this encrypted column is used in WHERE
                     if re.search(rf'\b{col_name}\b', query):
                         context['filter_strategies'][col_name] = 'use_tags'
 
+        # Analyze ORDER BY - sorting encrypted columns needs tags
         if 'ORDER BY' in query_upper:
             for col_name, col_mapping in table_mapping.encrypted_columns.items():
                 if col_mapping.is_encrypted and col_mapping.tag_name and col_mapping.supports_ordering:
                     if re.search(rf'\b{col_name}\b', query):
                         context['filter_strategies'][col_name] = 'use_tags'
 
+        # Analyze GROUP BY - grouping encrypted columns needs tags
         if 'GROUP BY' in query_upper:
             for col_name, col_mapping in table_mapping.encrypted_columns.items():
                 if col_mapping.is_encrypted and col_mapping.tag_name:
                     if re.search(rf'\b{col_name}\b', query):
                         context['filter_strategies'][col_name] = 'use_tags'
 
+        # Determine if we can work with encrypted data only (no decryption needed)
         context['can_use_encrypted_data'] = not context['needs_decryption']
 
+        # Set default strategies for SELECT clause
         for col_name, col_mapping in table_mapping.encrypted_columns.items():
             if col_mapping.is_encrypted:
                 if context['needs_decryption']:
+                    # For SELECT queries that need to display encrypted data, use encrypted columns for decryption
                     context['select_strategies'][col_name] = 'decrypt'
                     logger.debug(f"Set SELECT strategy 'decrypt' for column {col_name}")
                 elif context['can_use_encrypted_data']:
@@ -143,6 +156,7 @@ class SQLTranslator:
                     context['select_strategies'][col_name] = 'decrypt'
                     logger.debug(f"Set SELECT strategy 'decrypt' (fallback) for column {col_name}")
 
+        # For backward compatibility, keep the old column_strategies as filter_strategies
         context['column_strategies'] = context['filter_strategies']
 
         logger.debug(f"Query context analysis: needs_decryption={context['needs_decryption']}, select_strategies={context['select_strategies']}, filter_strategies={context['filter_strategies']}")
@@ -150,6 +164,7 @@ class SQLTranslator:
 
     def _compile_regex_patterns(self):
         """Pre-compile regex patterns for better performance"""
+        # Common patterns used throughout the translator
         self.patterns = {
             'union_split': re.compile(r'\s+(UNION\s+(?:ALL|DISTINCT)?)\s+', re.IGNORECASE),
             'intersect_split': re.compile(r'\s+INTERSECT\s+', re.IGNORECASE),
@@ -171,6 +186,7 @@ class SQLTranslator:
             'pivot_unpivot': re.compile(r'\b(PIVOT|UNPIVOT)\b', re.IGNORECASE),
         }
 
+        # Mathematical functions mapping
         self.math_functions = {
             'ABS', 'ROUND', 'CEIL', 'FLOOR', 'POWER', 'SQRT', 'EXP', 'LN', 'LOG', 'LOG10', 'LOG2',
             'SIN', 'COS', 'TAN', 'ASIN', 'ACOS', 'ATAN', 'ATAN2', 'COT', 'SEC', 'CSC',
@@ -178,6 +194,7 @@ class SQLTranslator:
             'RAND', 'RANDOM', 'CBRT', 'FACTORIAL', 'GCD', 'LCM'
         }
 
+        # String functions mapping
         self.string_functions = {
             'CONCAT', 'CONCAT_WS', 'SUBSTRING', 'SUBSTR', 'LEFT', 'RIGHT', 'MID',
             'LENGTH', 'CHAR_LENGTH', 'LEN', 'UPPER', 'LOWER', 'UCASE', 'LCASE',
@@ -187,6 +204,7 @@ class SQLTranslator:
             'UNICODE', 'NCHAR', 'STR', 'FORMAT', 'QUOTENAME', 'PARSENAME'
         }
 
+        # Date/Time functions mapping
         self.datetime_functions = {
             'NOW', 'CURRENT_TIMESTAMP', 'CURRENT_DATE', 'CURRENT_TIME',
             'DATE', 'TIME', 'YEAR', 'MONTH', 'DAY', 'HOUR', 'MINUTE', 'SECOND',
@@ -194,18 +212,21 @@ class SQLTranslator:
             'DAYOFWEEK', 'DAYOFMONTH', 'DAYOFYEAR', 'WEEK', 'QUARTER'
         }
 
+        # Aggregate functions
         self.aggregate_functions = {
             'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'STDDEV', 'VARIANCE', 'STDDEV_POP', 'STDDEV_SAMP',
             'VAR_POP', 'VAR_SAMP', 'GROUP_CONCAT', 'STRING_AGG', 'LISTAGG', 'ARRAY_AGG',
             'BOOL_AND', 'BOOL_OR', 'BIT_AND', 'BIT_OR', 'BIT_XOR', 'JSON_ARRAYAGG', 'JSON_OBJECTAGG'
         }
 
+        # Window functions
         self.window_functions = {
             'ROW_NUMBER', 'RANK', 'DENSE_RANK', 'PERCENT_RANK', 'CUME_DIST', 'NTILE',
             'LAG', 'LEAD', 'FIRST_VALUE', 'LAST_VALUE', 'NTH_VALUE',
             'SUM', 'AVG', 'MIN', 'MAX', 'COUNT', 'STDDEV', 'VARIANCE'  # These can be used as window functions too
         }
 
+        # Conditional functions
         self.conditional_functions = {
             'CASE', 'COALESCE', 'NULLIF', 'IFNULL', 'NVL', 'ISNULL'
         }
@@ -223,6 +244,7 @@ class SQLTranslator:
 
     def _translate_union_query(self, query: str) -> Tuple[str, Dict[str, Any]]:
         """Translate UNION queries"""
+        # Split UNION queries and translate each part
         union_parts = self.patterns['union_split'].split(query)
 
         translated_parts = []
@@ -231,18 +253,23 @@ class SQLTranslator:
         i = 0
         while i < len(union_parts):
             if re.match(r'UNION', union_parts[i], re.IGNORECASE):
+                # This is a UNION keyword, keep it as-is
                 translated_parts.append(union_parts[i])
                 union_keywords.append(union_parts[i].strip())
                 i += 1
             else:
+                # This is a SELECT query part - translate directly to avoid recursion
                 select_query = union_parts[i]
                 try:
+                    # Extract table name and get mapping
                     table_mapping = self._extract_table_mapping(select_query)
 
+                    # Translate the SELECT query directly using the select translation logic
                     if table_mapping:
                         translated_select, _ = self._translate_select(select_query, table_mapping)
                         translated_parts.append(translated_select)
                     else:
+                        # No mapping found, use as-is
                         translated_parts.append(select_query)
                 except Exception as e:
                     logger.warning(f"Failed to translate UNION part: {e}")
@@ -258,11 +285,13 @@ class SQLTranslator:
 
     def _translate_cte_query(self, query: str) -> Tuple[str, Dict[str, Any]]:
         """Translate Common Table Expression (CTE) queries"""
+        # Find the main SELECT after WITH
         select_start = re.search(r'\bSELECT\b', query[query.upper().find('WITH'):], re.IGNORECASE)
         if select_start:
             with_part = query[:query.upper().find('WITH') + select_start.start()]
             select_part = query[query.upper().find('WITH') + select_start.start():]
 
+            # Translate the main SELECT query
             translated_select, metadata = self.translate_query(select_part)
 
             translated_query = f"{with_part}{translated_select}"
@@ -270,10 +299,12 @@ class SQLTranslator:
 
             return translated_query, metadata
         else:
+            # Fallback to regular translation
             return self.translate_query(query)
 
     def _get_cache_key(self, query: str, table_name: str = None) -> str:
         """Generate cache key for query translation"""
+        # Include table_name in cache key for queries that depend on table mappings
         table_part = f":{table_name}" if table_name else ""
         return f"{query.strip().upper()}{table_part}"
 
@@ -284,6 +315,7 @@ class SQLTranslator:
     def _cache_translation(self, cache_key: str, translated_query: str, metadata: Dict[str, Any]):
         """Cache translation result"""
         if len(self.translation_cache) >= self.cache_max_size:
+            # Remove oldest entry (simple LRU approximation)
             oldest_key = next(iter(self.translation_cache))
             del self.translation_cache[oldest_key]
 
@@ -313,6 +345,7 @@ class SQLTranslator:
             Tuple of (translated_query, metadata)
         """
         try:
+            # Check cache first for performance
             cache_key = self._get_cache_key(query, table_name)
             cached_result = self._get_cached_translation(cache_key)
             if cached_result:
@@ -320,6 +353,7 @@ class SQLTranslator:
                 metadata = metadata.copy()  # Don't modify cached metadata
                 metadata["cached"] = True
                 return translated_query, metadata
+            # Check for special query types first
             query_upper = query.strip().upper()
 
             if 'UNION' in query_upper:
@@ -333,13 +367,17 @@ class SQLTranslator:
             elif 'PIVOT' in query_upper or 'UNPIVOT' in query_upper:
                 return self._translate_pivot_query(query)
 
+            # Determine query type
             query_type = self._determine_query_type(query)
 
+            # Get table mapping
             if table_name and table_name in self.table_mappings:
                 table_mapping = self.table_mappings[table_name]
             else:
+                # Try to extract table name from query
                 table_mapping = self._extract_table_mapping(query)
 
+            # Translate based on query type
             if query_type == QueryType.SELECT:
                 translated_query, metadata = self._translate_select(query, table_mapping)
             elif query_type == QueryType.INSERT:
@@ -353,6 +391,7 @@ class SQLTranslator:
             elif query_type in [QueryType.SHOW, QueryType.DESCRIBE, QueryType.EXPLAIN]:
                 translated_query, metadata = self._translate_utility(query, query_type)
             elif query_type in [QueryType.TRANSACTION, QueryType.DCL, QueryType.CALL, QueryType.USE]:
+                 # Pass-through for now
                 translated_query = query
                 metadata = {"query_type": query_type.value, "passthrough": True}
             else:
@@ -367,6 +406,7 @@ class SQLTranslator:
                 "cached": False
             })
 
+            # Cache successful translations for performance
             self._cache_translation(cache_key, translated_query, metadata)
 
             logger.info(f"✅ Query translated: {query_type.value} on {table_name}")
@@ -419,11 +459,13 @@ class SQLTranslator:
 
     def _extract_table_mapping(self, query: str) -> Optional[TableMapping]:
         """Extract table name from query and get mapping"""
+        # Extract table name based on query type
         query_upper = query.upper()
         logger.debug(f"Extracting table name from query: {query}")
 
         if query_upper.startswith('SELECT'):
-            from_match = self.patterns['select_from'].search(query)
+            # Look for FROM clause - handle backticks
+            from_match = re.search(r'\bFROM\s+`?([^\s,()` ]+)`?', query, re.IGNORECASE)
             if from_match:
                 table_name = from_match.group(1).strip('`')
                 logger.debug(f"Extracted table name: {table_name}")
@@ -433,12 +475,13 @@ class SQLTranslator:
             else:
                 logger.debug("No FROM clause found in SELECT query")
         elif query_upper.startswith(('INSERT', 'UPDATE', 'DELETE')):
+            # Look for table name after INSERT INTO, UPDATE, DELETE FROM - handle backticks
             if 'INSERT' in query_upper:
-                match = self.patterns['insert_into'].search(query)
+                match = re.search(r'\bINSERT\s+INTO\s+`?([^\s(` ]+)`?', query, re.IGNORECASE)
             elif 'UPDATE' in query_upper:
-                match = self.patterns['update_table'].search(query)
+                match = re.search(r'\bUPDATE\s+`?([^\s` ]+)`?', query, re.IGNORECASE)
             elif 'DELETE' in query_upper:
-                match = self.patterns['delete_from'].search(query)
+                match = re.search(r'\bDELETE\s+FROM\s+`?([^\s` ]+)`?', query, re.IGNORECASE)
 
             if match:
                 table_name = match.group(1).strip('`')
@@ -456,26 +499,35 @@ class SQLTranslator:
         translated_query = query
 
         if table_mapping:
+            # Analyze query context to determine optimal translation strategy
             context = self._analyze_query_context(query, table_mapping)
 
+            # Store translation strategy for this query
             self.translation_strategies[query] = context
 
+            # Translate column names in SELECT clause FIRST (before subqueries)
             translated_query = self._translate_select_columns_intelligent(translated_query, table_mapping, context)
 
+            # Handle subqueries in the entire query
             translated_query = self._translate_subqueries_in_query(translated_query, table_mapping)
 
+            # Handle JOIN clauses
             if any(join_type in query.upper() for join_type in ['JOIN', 'INNER JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'FULL OUTER JOIN', 'CROSS JOIN']):
                 translated_query = self._translate_join_clauses(translated_query, table_mapping)
 
+            # Handle WHERE clause with encrypted columns - use tags for filtering
             if 'WHERE' in query.upper():
                 translated_query = self._translate_where_clause_intelligent(translated_query, table_mapping, context)
 
+            # Handle GROUP BY clause
             if 'GROUP BY' in query.upper():
                 translated_query = self._translate_group_by_clause_intelligent(translated_query, table_mapping, context)
 
+            # Handle HAVING clause
             if 'HAVING' in query.upper():
                 translated_query = self._translate_having_clause_intelligent(translated_query, table_mapping, context)
 
+            # Handle ORDER BY with encrypted columns - use tags for sorting
             if 'ORDER BY' in query.upper():
                 translated_query = self._translate_order_by_clause_intelligent(translated_query, table_mapping, context)
 
@@ -504,19 +556,24 @@ class SQLTranslator:
             List of rows, where each row is a list of values
         """
         try:
+            # Remove leading/trailing whitespace
             values_part = values_part.strip()
             
+            # Remove trailing semicolon if present
             if values_part.endswith(';'):
                 values_part = values_part[:-1].strip()
             
+            # Find all value rows - pattern: (...), (...), ...
             rows = []
             current_pos = 0
             
             while current_pos < len(values_part):
+                # Find opening parenthesis
                 start_paren = values_part.find('(', current_pos)
                 if start_paren == -1:
                     break
                 
+                # Find matching closing parenthesis (handle nested parentheses)
                 paren_count = 1
                 pos = start_paren + 1
                 while pos < len(values_part) and paren_count > 0:
@@ -527,13 +584,16 @@ class SQLTranslator:
                     pos += 1
                 
                 if paren_count == 0:
+                    # Extract the content between parentheses
                     row_content = values_part[start_paren + 1:pos - 1]
                     
+                    # Parse individual values in this row
                     row_values = self._parse_row_values(row_content)
                     rows.append(row_values)
                     
                     current_pos = pos
                 else:
+                    # Unmatched parentheses
                     logger.warning(f"Unmatched parentheses in VALUES clause: {values_part}")
                     break
             
@@ -575,11 +635,13 @@ class SQLTranslator:
                 paren_depth -= 1
                 current_value += char
             elif char == ',' and not in_quotes and paren_depth == 0:
+                # End of current value
                 values.append(current_value.strip().strip("'\""))
                 current_value = ""
             else:
                 current_value += char
         
+        # Add the last value
         if current_value.strip():
             values.append(current_value.strip().strip("'\""))
         
@@ -587,33 +649,41 @@ class SQLTranslator:
 
     def _translate_insert(self, query: str, table_mapping: TableMapping) -> Tuple[str, Dict[str, Any]]:
         """Translate INSERT query with encryption for encrypted columns"""
+        # Clear cache to ensure no cached translations interfere
         self.clear_cache()
 
         translated_query = query
         metadata = {}
 
         if table_mapping:
-            insert_match = re.search(r'INSERT\s+INTO\s+(\w+)\s*\(([^)]+)\)\s*VALUES\s*(.+)', query, re.IGNORECASE | re.DOTALL)
+            # Parse INSERT query to extract columns and values - handle multi-row VALUES
+            # Updated regex to handle backtick-quoted table and column names
+            insert_match = re.search(r'INSERT\s+INTO\s+`?(\w+)`?\s*\(([^)]+)\)\s*VALUES\s*(.+)', query, re.IGNORECASE | re.DOTALL)
             if insert_match:
                 table_name = insert_match.group(1).strip()
                 columns_str = insert_match.group(2).strip()
                 values_part = insert_match.group(3).strip()
 
-                original_columns = [col.strip() for col in columns_str.split(',')]
+                # Parse column names - remove backticks if present
+                original_columns = [col.strip().strip('`') for col in columns_str.split(',')]
 
+                # Parse VALUES clause - can have multiple rows like (val1, val2), (val3, val4)
                 values_rows = self._parse_values_clause(values_part)
 
                 if not values_rows:
                     logger.warning("Could not parse VALUES clause in INSERT")
                     return query, metadata
 
+                # Check if first row has correct number of columns
                 if len(original_columns) != len(values_rows[0]):
                     logger.warning(f"Column count ({len(original_columns)}) doesn't match value count ({len(values_rows[0])}) in first VALUES row")
                     return query, metadata
 
+                # Build final column list (add tag columns for encrypted columns)
                 final_columns = original_columns.copy()
                 encrypted_columns_map = {}
 
+                # Identify encrypted columns and add their tag columns
                 for col in original_columns:
                     if col in table_mapping.encrypted_columns:
                         col_mapping = table_mapping.encrypted_columns[col]
@@ -621,39 +691,51 @@ class SQLTranslator:
                             final_columns.append(col_mapping.tag_name)
                             encrypted_columns_map[col] = col_mapping
 
+                # Process each row of values
                 translated_rows = []
                 encryption_metadata = {}
 
                 for row_values in values_rows:
+                    # Separate main values and tag values to maintain correct column order
                     main_values = []
                     tag_values = []
 
+                    # Process each column in this row
                     for i, val in enumerate(row_values):
                         col = original_columns[i]
 
                         if col in encrypted_columns_map:
                             col_mapping = encrypted_columns_map[col]
 
+                            # Encrypt the value
                             encrypted_blob = clwe_encryptor.encrypt_value(val, settings.CRYPTOPIX_DEFAULT_PASSWORD)
                             encrypted_hex = encrypted_blob.hex()
 
+                            # Use database-specific syntax for BYTEA/BLOB insert
                             if self.database_type and self.database_type.value == 'postgresql':
+                                # PostgreSQL BYTEA syntax
                                 main_values.append(f"decode('{encrypted_hex}', 'hex')")
                             else:
+                                # MySQL/SQLite syntax
                                 main_values.append(f"X'{encrypted_hex}'")
 
+                            # Generate tag with actual data type from column mapping
                             try:
-                                tag_value = clwe_encryptor.generate_unified_tag(val, "text")
+                                # Get actual data type from column mapping (consistent with migration)
+                                data_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
+                                tag_value = clwe_encryptor.generate_unified_tag(val, data_type)
                                 tag_values.append(f"'{tag_value}'")
-                                logger.info(f"Added tag for INSERT column '{col}': {tag_value}")
+                                logger.info(f"Added tag for INSERT column '{col}': {tag_value} (data_type: {data_type})")
                             except Exception as e:
                                 logger.error(f"Failed to generate tag for INSERT on column '{col}': {e}")
+                                # Add fallback tag
                                 fallback_tag = "0" * 20
                                 tag_values.append(f"'{fallback_tag}'")
                                 logger.warning(f"Using fallback tag for INSERT on column '{col}': {fallback_tag}")
 
                             logger.info(f"Encrypted INSERT column '{col}' value '{val[:20]}...' -> {len(encrypted_hex)} bytes")
 
+                            # Store encryption metadata (use first row as reference)
                             if col not in encryption_metadata:
                                 encryption_metadata[col] = {
                                     "type": "encrypted",
@@ -662,15 +744,20 @@ class SQLTranslator:
                                     "tag_value": tag_value if 'tag_value' in locals() else fallback_tag
                                 }
                         else:
+                            # Regular column - keep as-is
+                            # Check if it's a number or string
                             if val.replace('.', '').replace('-', '').isdigit():
                                 main_values.append(val)  # Numeric value
                             else:
                                 main_values.append(f"'{val}'")  # String value
 
+                    # Combine main values and tag values in correct column order
                     translated_values = main_values + tag_values
 
+                    # Add this row to the translated rows
                     translated_rows.append(f"({', '.join(translated_values)})")
 
+                # Reconstruct INSERT query
                 columns_str = ', '.join(final_columns)
                 values_str = ', '.join(translated_rows)
                 translated_query = f"INSERT INTO {table_name} ({columns_str}) VALUES {values_str}"
@@ -684,8 +771,10 @@ class SQLTranslator:
         translated_query = query
 
         if table_mapping:
+            # Handle subqueries in the entire query first
             translated_query = self._translate_subqueries_in_query(translated_query, table_mapping)
 
+            # Handle SET clause with encrypted columns
             set_match = re.search(r'SET\s+(.+?)(?:\s+WHERE|$)', query, re.IGNORECASE | re.DOTALL)
             if set_match:
                 set_clause = set_match.group(1)
@@ -700,25 +789,34 @@ class SQLTranslator:
                         col = parts[0].strip()
                         val_expr = parts[1].strip()
 
+                        # Handle function calls in SET values
                         val_expr = self._translate_function_calls(val_expr, table_mapping)
 
+                        # Extract the final value (remove quotes if present)
                         val = val_expr.strip("'\"")
 
                         if col in table_mapping.encrypted_columns:
                             col_mapping = table_mapping.encrypted_columns[col]
                             if col_mapping.is_encrypted:
+                                # Encrypt the value
                                 encrypted_blob = clwe_encryptor.encrypt_value(val, settings.CRYPTOPIX_DEFAULT_PASSWORD)
                                 encrypted_hex = encrypted_blob.hex()
 
+                                # Use database-specific syntax for BYTEA/BLOB update
                                 if self.database_type and self.database_type.value == 'postgresql':
+                                    # PostgreSQL BYTEA syntax
                                     translated_assignments.append(f"{col_mapping.encrypted_name} = decode('{encrypted_hex}', 'hex')")
                                 else:
+                                    # MySQL/SQLite syntax
                                     translated_assignments.append(f"{col_mapping.encrypted_name} = X'{encrypted_hex}'")
 
+                                # Update tag with actual data type from column mapping
                                 try:
-                                    tag_value = clwe_encryptor.generate_unified_tag(val, "text")
+                                    # Get actual data type from column mapping (consistent with migration)
+                                    data_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
+                                    tag_value = clwe_encryptor.generate_unified_tag(val, data_type)
                                     translated_assignments.append(f"{col_mapping.tag_name} = '{tag_value}'")
-                                    logger.info(f"Updated tag for column '{col}': {tag_value}")
+                                    logger.info(f"Updated tag for column '{col}': {tag_value} (data_type: {data_type})")
                                 except Exception as e:
                                     logger.error(f"Failed to generate tag for UPDATE on column '{col}': {e}")
                                     fallback_tag = "0" * 20
@@ -738,12 +836,15 @@ class SQLTranslator:
                         else:
                             translated_assignments.append(f"{col} = {val_expr}")
 
+                # Reconstruct SET clause
                 new_set_clause = ', '.join(translated_assignments)
                 translated_query = re.sub(r'SET\s+.+?(?=\s+WHERE|$)', f'SET {new_set_clause}', translated_query, flags=re.IGNORECASE | re.DOTALL)
 
+            # Handle WHERE clause with enhanced operations
             if 'WHERE' in query.upper():
                 translated_query = self._translate_where_clause_intelligent(translated_query, table_mapping, {})
 
+        # Analyze query context to determine if tags are used
         context = self._analyze_query_context(query, table_mapping)
         uses_tags = context.get('needs_tags', False)
 
@@ -760,11 +861,14 @@ class SQLTranslator:
         translated_query = query
 
         if table_mapping:
+            # Handle subqueries in the entire query first
             translated_query = self._translate_subqueries_in_query(translated_query, table_mapping)
 
+            # Handle WHERE clause with enhanced operations
             if 'WHERE' in query.upper():
                 translated_query = self._translate_where_clause_intelligent(translated_query, table_mapping, {})
 
+        # Analyze query context to determine if tags are used
         context = self._analyze_query_context(query, table_mapping)
         uses_tags = context.get('needs_tags', False)
 
@@ -779,7 +883,9 @@ class SQLTranslator:
         """Translate DDL queries (CREATE, ALTER, DROP, TRUNCATE, MERGE, REPLACE)"""
         translated_query = query
 
+        # Handle TRUNCATE TABLE for databases that don't support it (like SQLite)
         if query_type == QueryType.TRUNCATE:
+            # Convert TRUNCATE TABLE to DELETE FROM for SQLite compatibility
             truncate_match = re.search(r'TRUNCATE\s+TABLE\s+(\w+)', query, re.IGNORECASE)
             if truncate_match:
                 table_name = truncate_match.group(1)
@@ -795,6 +901,7 @@ class SQLTranslator:
 
     def _translate_utility(self, query: str, query_type: QueryType) -> Tuple[str, Dict[str, Any]]:
         """Translate utility queries (SHOW, DESCRIBE, EXPLAIN)"""
+        # Utility queries are generally passed through
         translated_query = query
 
         metadata = {
@@ -809,30 +916,37 @@ class SQLTranslator:
         if not table_mapping:
             return expression
 
+        # Handle mathematical functions
         for func in self.math_functions:
             pattern = rf'\b{func}\s*\('
             expression = re.sub(pattern, f'{func}(', expression, flags=re.IGNORECASE)
 
+        # Handle string functions
         for func in self.string_functions:
             pattern = rf'\b{func}\s*\('
             expression = re.sub(pattern, f'{func}(', expression, flags=re.IGNORECASE)
 
+        # Handle datetime functions
         for func in self.datetime_functions:
             pattern = rf'\b{func}\s*\('
             expression = re.sub(pattern, f'{func}(', expression, flags=re.IGNORECASE)
 
+        # Handle aggregate functions
         for func in self.aggregate_functions:
             pattern = rf'\b{func}\s*\('
             expression = re.sub(pattern, f'{func}(', expression, flags=re.IGNORECASE)
 
+        # Handle conditional functions
         for func in self.conditional_functions:
             pattern = rf'\b{func}\s*\('
             expression = re.sub(pattern, f'{func}(', expression, flags=re.IGNORECASE)
 
+        # Handle window functions
         for func in self.window_functions:
             pattern = rf'\b{func}\s*\('
             expression = re.sub(pattern, f'{func}(', expression, flags=re.IGNORECASE)
 
+        # Translate column names within function arguments
         expression = self._translate_column_references(expression, table_mapping)
 
         return expression
@@ -842,8 +956,11 @@ class SQLTranslator:
         if not table_mapping:
             return expression
 
+        # Replace column names with their encrypted counterparts
         for col_name, col_mapping in table_mapping.encrypted_columns.items():
             if col_mapping.is_encrypted:
+                # Replace column references in expressions
+                # Use word boundaries to avoid partial matches
                 pattern = rf'\b{re.escape(col_name)}\b'
                 expression = re.sub(pattern, col_mapping.encrypted_name, expression)
 
@@ -854,10 +971,12 @@ class SQLTranslator:
         if not table_mapping:
             return query
 
+        # Find the SELECT clause more carefully to avoid matching subqueries
         select_start = re.search(r'\bSELECT\s+', query, re.IGNORECASE)
         if not select_start:
             return query
 
+        # Find the FROM clause, but skip ones inside subqueries
         pos = select_start.end()
         paren_depth = 0
         from_pos = -1
@@ -878,37 +997,48 @@ class SQLTranslator:
 
         select_clause = query[select_start.end():from_pos].strip()
 
+        # Handle SELECT *
         if select_clause.upper() == '*':
+            # For SELECT *, we need to decide based on context
             all_columns = []
             for col_name, col_mapping in table_mapping.encrypted_columns.items():
                 if col_mapping.is_encrypted:
                     if context.get('needs_decryption', False):
+                        # Decryption needed - include encrypted data column for decryption
                         all_columns.append(col_mapping.encrypted_name)
                     else:
+                        # No decryption needed - can work with encrypted data directly
                         all_columns.append(col_mapping.encrypted_name)
                 else:
                     all_columns.append(col_name)
+            # Add non-encrypted columns
             all_columns.extend(table_mapping.non_encrypted_columns)
 
             new_select_clause = ', '.join(all_columns)
         else:
+            # Parse and translate each column/expression in SELECT clause
             columns = self._split_select_columns(select_clause)
 
+            # Translate each column/expression with context awareness
             translated_columns = []
             for col in columns:
                 col = col.strip()
                 if not col:
                     continue
 
+                # Check if it's a function call or regular column
                 if re.search(r'\w+\s*\(', col):
+                    # Translate function calls
                     translated_col = self._translate_function_calls(col, table_mapping)
                     translated_columns.append(translated_col)
                 else:
+                    # Translate regular column references with context awareness (use select_strategies for SELECT clause)
                     translated_col = self._translate_column_references_intelligent(col, table_mapping, context, use_select_strategies=True)
                     translated_columns.append(translated_col)
 
             new_select_clause = ', '.join(translated_columns)
 
+        # Reconstruct SELECT clause
         old_select = query[select_start.start():from_pos]
         new_select = f"SELECT {new_select_clause} "
         query = query.replace(old_select, new_select, 1)
@@ -920,21 +1050,27 @@ class SQLTranslator:
         if not table_mapping:
             return expression
 
+        # Choose which strategies to use
         strategies = context.get('select_strategies' if use_select_strategies else 'filter_strategies', {})
 
+        # Replace column names with their encrypted counterparts based on context
         for col_name, col_mapping in table_mapping.encrypted_columns.items():
             if col_mapping.is_encrypted:
+                # Use word boundaries to avoid partial matches
                 pattern = rf'\b{re.escape(col_name)}\b'
 
                 strategy = strategies.get(col_name, 'use_encrypted_data')
 
                 if strategy == 'use_tags' and col_mapping.tag_name:
+                    # Use tags for filtering/sorting operations
                     expression = re.sub(pattern, col_mapping.tag_name, expression)
                     logger.debug(f"Using tags for column {col_name} -> {col_mapping.tag_name}")
                 elif strategy == 'decrypt':
+                    # Select encrypted column for decryption in results
                     expression = re.sub(pattern, col_mapping.encrypted_name, expression)
                     logger.debug(f"Will decrypt column {col_name} -> {col_mapping.encrypted_name} (encrypted_name: {col_mapping.encrypted_name})")
                 else:
+                    # Use encrypted data directly (no decryption needed)
                     expression = re.sub(pattern, col_mapping.encrypted_name, expression)
                     logger.debug(f"Using encrypted data directly for column {col_name} -> {col_mapping.encrypted_name}")
 
@@ -945,23 +1081,30 @@ class SQLTranslator:
         if not table_mapping:
             return clause
 
+        # Use a more robust approach with regex to find and replace subqueries
+        # Pattern to match SELECT subqueries with balanced parentheses
         subquery_pattern = r'\(\s*SELECT\s+.*?\s+FROM\s+.*?\)'
 
         def replace_subquery(match):
             subquery = match.group(0)
             logger.debug(f"Processing subquery: {subquery}")
 
+            # Remove outer parentheses for processing
             inner_subquery = subquery.strip('()')
 
             try:
+                # Extract table name from subquery
                 from_match = re.search(r'\bFROM\s+([^\s,()]+)', inner_subquery, re.IGNORECASE)
                 if from_match:
                     subquery_table = from_match.group(1).strip('`')
                     logger.debug(f"Subquery table: {subquery_table}")
 
+                    # Check if we have mapping for this table
                     if subquery_table in self.table_mappings:
                         subquery_mapping = self.table_mappings[subquery_table]
+                        # Translate the subquery recursively
                         translated_inner = self._translate_select_query(inner_subquery, subquery_mapping)
+                        # Return with parentheses
                         return f"({translated_inner})"
                     else:
                         logger.debug(f"No table mapping found for subquery table: {subquery_table}")
@@ -973,6 +1116,8 @@ class SQLTranslator:
                 logger.warning(f"Failed to translate subquery {subquery}: {e}")
                 return subquery
 
+        # Replace all subqueries in the clause
+        # Use re.sub with a function to handle each match
         translated_clause = re.sub(subquery_pattern, replace_subquery, clause, flags=re.IGNORECASE | re.DOTALL)
 
         return translated_clause
@@ -982,6 +1127,7 @@ class SQLTranslator:
         if not table_mapping:
             return query
 
+        # Use the same subquery translation logic
         return self._translate_subqueries(query, table_mapping)
 
     def _translate_select_query(self, query: str, table_mapping: TableMapping) -> str:
@@ -989,8 +1135,12 @@ class SQLTranslator:
         translated_query = query
 
         if table_mapping:
+            # For subqueries, we typically don't translate the SELECT clause
+            # as the caller expects specific column names. Only translate WHERE clauses.
+            # But we need to handle subqueries within the subquery itself
             translated_query = self._translate_subqueries_in_query(translated_query, table_mapping)
 
+            # Handle WHERE clause with encrypted columns
             if 'WHERE' in query.upper():
                 translated_query = self._translate_where_clause_in_subquery(translated_query, table_mapping)
 
@@ -1001,6 +1151,7 @@ class SQLTranslator:
         if not table_mapping:
             return query
 
+        # Similar to main _translate_where_clause but for subqueries
         where_match = re.search(r'WHERE\s+(.+?)(?:\s+(?:ORDER|GROUP|HAVING|LIMIT|$))', query, re.IGNORECASE | re.DOTALL)
         if not where_match:
             where_match = re.search(r'WHERE\s+(.+?)$', query, re.IGNORECASE | re.DOTALL)
@@ -1008,12 +1159,16 @@ class SQLTranslator:
         if where_match:
             where_clause = where_match.group(1)
 
+            # Handle subqueries recursively
             where_clause = self._translate_subqueries(where_clause, table_mapping)
 
             original_where = where_clause
 
+            # Find column comparisons
             for col_name, col_mapping in table_mapping.encrypted_columns.items():
                 if col_mapping.is_encrypted and col_mapping.tag_name:
+                    # Replace column = 'value' with tag_column = HMAC('value')
+                    # Handle both quoted and unquoted values
                     pattern = rf'\b{col_name}\s*=\s*(?:([\'"]([^\'"]+)[\'"])|\b([^\'"\s]+)\b)'
 
                     def replace_func(match):
@@ -1021,7 +1176,8 @@ class SQLTranslator:
                             value = match.group(2)
                         else:  # Unquoted value
                             value = match.group(3)
-                        tag_value = clwe_encryptor.generate_unified_tag(str(value), "text")
+                        data_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
+                        tag_value = clwe_encryptor.generate_unified_tag(str(value), data_type)
                         return f"{col_mapping.tag_name} = '{tag_value}'"
 
                     where_clause = re.sub(pattern, replace_func, where_clause)
@@ -1038,8 +1194,10 @@ class SQLTranslator:
 
         logger.debug(f"Translating WHERE clause for table with encrypted columns: {list(table_mapping.encrypted_columns.keys())}")
 
+        # Enhanced WHERE clause translation with context awareness
         where_match = self.patterns['where_clause'].search(query)
         if not where_match:
+            # Try simpler pattern for end of query
             where_match = re.search(r'WHERE\s+(.+?)$', query, re.IGNORECASE | re.DOTALL)
 
         if where_match:
@@ -1048,15 +1206,19 @@ class SQLTranslator:
 
             original_where = where_clause
 
+            # Handle function calls in WHERE clause first
             where_clause = self._translate_function_calls(where_clause, table_mapping)
 
+            # Handle encrypted column comparisons using tags for filtering
             for col_name, col_mapping in table_mapping.encrypted_columns.items():
                 if col_mapping.is_encrypted and col_mapping.tag_name:
                     strategy = context.get('column_strategies', {}).get(col_name, 'use_tags')
 
                     if strategy == 'use_tags':
+                        # Use tags for WHERE clause filtering - this is the primary use case for tags
                         logger.debug(f"Using tags for WHERE filtering on column {col_name}")
 
+                        # Handle equality comparisons: column = value
                         eq_pattern = rf'\b{col_name}\s*=\s*(?:([\'"]([^\'"]+)[\'"])|\b([^\'"\s]+)\b)'
 
                         def replace_eq_func(match):
@@ -1064,33 +1226,43 @@ class SQLTranslator:
                                 value = match.group(2)
                             else:  # Unquoted value
                                 value = match.group(3)
-                            tag_value = clwe_encryptor.generate_unified_tag(str(value), "text")
+                            data_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
+                            tag_value = clwe_encryptor.generate_unified_tag(str(value), data_type)
                             return f"{col_mapping.tag_name} = '{tag_value}'"
 
                         where_clause = re.sub(eq_pattern, replace_eq_func, where_clause)
 
+                        # Handle LIKE operations: column LIKE 'pattern'
                         like_pattern = rf'\b{col_name}\s+LIKE\s+([\'"]([^\'"]*)[\'"])'
 
                         def replace_like_func(match):
                             pattern = match.group(2)
+                            # For LIKE, we need to handle pattern matching on tags
+                            # This is complex - for now, convert to equality if no wildcards
                             if '%' not in pattern and '_' not in pattern:
-                                tag_value = clwe_encryptor.generate_unified_tag(pattern, "text")
+                                data_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
+                                tag_value = clwe_encryptor.generate_unified_tag(pattern, data_type)
                                 return f"{col_mapping.tag_name} = '{tag_value}'"
                             else:
+                                # For patterns with wildcards, we can't use tags efficiently
+                                # Fall back to direct column comparison (less secure but functional)
                                 logger.warning(f"LIKE with wildcards on encrypted column {col_name} - using direct comparison (less secure)")
                                 return f"{col_mapping.encrypted_name} LIKE {match.group(1)}"
 
                         where_clause = re.sub(like_pattern, replace_like_func, where_clause, flags=re.IGNORECASE)
 
+                        # Handle IN operations: column IN (value1, value2, ...)
                         in_pattern = rf'\b{col_name}\s+IN\s*\(\s*([^)]+)\s*\)'
 
                         def replace_in_func(match):
                             values_str = match.group(1)
+                            # Parse values
                             values = []
                             for val in values_str.split(','):
                                 val = val.strip().strip("'\"")
                                 if val:
-                                    tag_value = clwe_encryptor.generate_unified_tag(val, "text")
+                                    data_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
+                                    tag_value = clwe_encryptor.generate_unified_tag(val, data_type)
                                     values.append(f"'{tag_value}'")
 
                             if values:
@@ -1099,17 +1271,20 @@ class SQLTranslator:
 
                         where_clause = re.sub(in_pattern, replace_in_func, where_clause, flags=re.IGNORECASE)
 
+                        # Handle BETWEEN operations: column BETWEEN value1 AND value2
                         between_pattern = rf'\b{col_name}\s+BETWEEN\s+(.+?)\s+AND\s+(.+?)(?:\s|$)'
 
                         def replace_between_func(match):
                             val1 = match.group(1).strip().strip("'\"")
                             val2 = match.group(2).strip().strip("'\"")
-                            tag1 = clwe_encryptor.generate_unified_tag(val1, "text")
-                            tag2 = clwe_encryptor.generate_unified_tag(val2, "text")
+                            data_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
+                            tag1 = clwe_encryptor.generate_unified_tag(val1, data_type)
+                            tag2 = clwe_encryptor.generate_unified_tag(val2, data_type)
                             return f"{col_mapping.tag_name} BETWEEN '{tag1}' AND '{tag2}'"
 
                         where_clause = re.sub(between_pattern, replace_between_func, where_clause, flags=re.IGNORECASE)
 
+                        # Handle range operations: column > value, column < value, etc.
                         for op in ['>', '<', '>=', '<=', '!=', '<>']:
                             range_pattern = rf'\b{col_name}\s*{re.escape(op)}\s*(?:([\'"]([^\'"]+)[\'"])|\b([^\'"\s]+)\b)'
 
@@ -1118,11 +1293,13 @@ class SQLTranslator:
                                     value = match.group(2)
                                 else:  # Unquoted value
                                     value = match.group(3)
-                                tag_value = clwe_encryptor.generate_unified_tag(str(value), "text")
+                                data_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
+                                tag_value = clwe_encryptor.generate_unified_tag(str(value), data_type)
                                 return f"{col_mapping.tag_name} {operator} '{tag_value}'"
 
                             where_clause = re.sub(range_pattern, replace_range_func, where_clause)
 
+                        # Handle IS NULL / IS NOT NULL
                         null_pattern = rf'\b{col_name}\s+IS\s+(NOT\s+)?NULL'
 
                         def replace_null_func(match):
@@ -1134,10 +1311,13 @@ class SQLTranslator:
 
                         where_clause = re.sub(null_pattern, replace_null_func, where_clause, flags=re.IGNORECASE)
                     else:
+                        # For other strategies, keep original column references
                         logger.debug(f"Not using tags for WHERE on column {col_name}, strategy: {strategy}")
 
+            # Handle subqueries recursively AFTER main WHERE clause processing
             where_clause = self._translate_subqueries(where_clause, table_mapping)
 
+            # Only update query if WHERE clause actually changed
             if where_clause != original_where:
                 query = query.replace(f"WHERE {original_where}", f"WHERE {where_clause}")
         else:
@@ -1154,8 +1334,10 @@ class SQLTranslator:
         if group_match:
             group_clause = group_match.group(1)
 
+            # Translate column references in GROUP BY with filter strategies (use tags)
             group_clause = self._translate_column_references_intelligent(group_clause, table_mapping, context, use_select_strategies=False)
 
+            # Reconstruct GROUP BY clause
             query = re.sub(r'GROUP BY\s+.+?(?=\s+(?:HAVING|ORDER|LIMIT|$))', f'GROUP BY {group_clause}', query, flags=re.IGNORECASE | re.DOTALL)
 
         return query
@@ -1169,8 +1351,10 @@ class SQLTranslator:
         if having_match:
             having_clause = having_match.group(1)
 
+            # Translate function calls and column references in HAVING
             having_clause = self._translate_function_calls(having_clause, table_mapping)
 
+            # Handle encrypted column comparisons in HAVING using filter strategies (tags)
             for col_name, col_mapping in table_mapping.encrypted_columns.items():
                 if col_mapping.is_encrypted and col_mapping.tag_name:
                     filter_strategy = context.get('filter_strategies', {}).get(col_name, 'use_tags')
@@ -1183,11 +1367,13 @@ class SQLTranslator:
                                 value = match.group(2)
                             else:  # Unquoted value
                                 value = match.group(3)
-                            tag_value = clwe_encryptor.generate_unified_tag(str(value), "text")
+                            data_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
+                            tag_value = clwe_encryptor.generate_unified_tag(str(value), data_type)
                             return f"{col_mapping.tag_name} = '{tag_value}'"
 
                         having_clause = re.sub(eq_pattern, replace_eq_func, having_clause)
 
+            # Reconstruct HAVING clause
             query = re.sub(r'HAVING\s+.+?(?=\s+(?:ORDER|LIMIT|$))', f'HAVING {having_clause}', query, flags=re.IGNORECASE | re.DOTALL)
 
         return query
@@ -1197,6 +1383,8 @@ class SQLTranslator:
         if not table_mapping:
             return query
 
+        # Handle JOIN clauses - this is complex as it involves multiple tables
+        # For now, we'll translate column references in JOIN conditions
         join_pattern = r'(INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|FULL\s+OUTER\s+JOIN|CROSS\s+JOIN|JOIN)\s+(\w+(?:\s+\w+)?)\s+ON\s+(.+?)(?:\s+(?:WHERE|GROUP|ORDER|LIMIT|$)|\s*$)'
 
         def replace_join(match):
@@ -1204,6 +1392,7 @@ class SQLTranslator:
             table_name = match.group(2)
             condition = match.group(3)
 
+            # Translate column references in JOIN condition
             condition = self._translate_column_references(condition, table_mapping)
 
             return f"{join_type} {table_name} ON {condition}"
@@ -1217,18 +1406,22 @@ class SQLTranslator:
         if not table_mapping:
             return query
 
+        # Enhanced ORDER BY translation - more flexible pattern
         order_match = re.search(r'ORDER BY\s+(.+?)(?:\s+(?:GROUP|HAVING|LIMIT|$))', query, re.IGNORECASE | re.DOTALL)
         if not order_match:
+            # Try simpler pattern for end of query
             order_match = re.search(r'ORDER BY\s+(.+?)$', query, re.IGNORECASE | re.DOTALL)
 
         if order_match:
             order_clause = order_match.group(1)
             logger.debug(f"Translating ORDER BY clause: '{order_clause}'")
 
+            # Handle multiple columns and ASC/DESC
             order_parts = [part.strip() for part in order_clause.split(',')]
             translated_parts = []
 
             for part in order_parts:
+                # Split column and direction
                 col_part = part
                 direction = ""
                 if part.upper().endswith(' ASC'):
@@ -1244,15 +1437,19 @@ class SQLTranslator:
                     col_part = part[:-11].strip()
                     direction = " NULLS LAST"
 
+                # Check if this is an encrypted column and decide strategy
                 translated_col = col_part.strip()
                 for col_name, col_mapping in table_mapping.encrypted_columns.items():
                     if col_mapping.is_encrypted and translated_col == col_name:
+                        # For ORDER BY, use filter strategies (tags for encrypted columns)
                         filter_strategy = context.get('filter_strategies', {}).get(col_name, 'use_tags')
 
                         if filter_strategy == 'use_tags' and col_mapping.tag_name and col_mapping.supports_ordering:
+                            # Use tags for sorting encrypted columns
                             translated_col = col_mapping.tag_name
                             logger.debug(f"Using tags for ORDER BY on column {col_name}")
                         else:
+                            # Use encrypted data directly for sorting
                             translated_col = col_mapping.encrypted_name
                             logger.debug(f"Using encrypted data for ORDER BY on column {col_name}")
                         break
@@ -1261,16 +1458,19 @@ class SQLTranslator:
 
             new_order_clause = ', '.join(translated_parts)
 
+            # Try the simpler pattern first since ORDER BY is usually at the end
             original_query = query
             query = re.sub(r'ORDER BY\s+(.+?)$', f'ORDER BY {new_order_clause}', query, flags=re.IGNORECASE | re.DOTALL)
 
             if query == original_query:
+                # If that didn't work, try the more complex pattern
                 query = re.sub(r'ORDER BY\s+.+?(?=\s+(?:GROUP|HAVING|LIMIT|$))', f'ORDER BY {new_order_clause}', query, flags=re.IGNORECASE | re.DOTALL)
 
         return query
 
     def _translate_intersect_query(self, query: str) -> Tuple[str, Dict[str, Any]]:
         """Translate INTERSECT queries"""
+        # Split INTERSECT queries and translate each part
         intersect_parts = re.split(r'\s+INTERSECT\s+', query, flags=re.IGNORECASE)
 
         translated_parts = []
@@ -1279,6 +1479,7 @@ class SQLTranslator:
         for part in intersect_parts:
             part = part.strip()
             if part:
+                # Try to translate each INTERSECT part
                 try:
                     translated_part, part_metadata = self.translate_query(part)
                     translated_parts.append(translated_part)
@@ -1292,6 +1493,7 @@ class SQLTranslator:
 
     def _translate_except_query(self, query: str) -> Tuple[str, Dict[str, Any]]:
         """Translate EXCEPT/MINUS queries"""
+        # Handle both EXCEPT and MINUS
         if 'EXCEPT' in query.upper():
             except_parts = re.split(r'\s+EXCEPT\s+', query, flags=re.IGNORECASE)
             operation = "EXCEPT"
@@ -1305,6 +1507,7 @@ class SQLTranslator:
         for part in except_parts:
             part = part.strip()
             if part:
+                # Try to translate each EXCEPT part
                 try:
                     translated_part, part_metadata = self.translate_query(part)
                     translated_parts.append(translated_part)
@@ -1318,12 +1521,15 @@ class SQLTranslator:
 
     def _translate_pivot_query(self, query: str) -> Tuple[str, Dict[str, Any]]:
         """Translate PIVOT/UNPIVOT queries"""
+        # PIVOT/UNPIVOT operations are complex and may not be fully translatable
+        # For now, we'll attempt basic translation of the base query
         translated_query = query
         metadata = {
             "pivot_operation": True,
             "note": "PIVOT/UNPIVOT operations have limited translation support"
         }
 
+        # Try to extract and translate the base SELECT query
         pivot_match = re.search(r'(SELECT.*?)(?:\s+PIVOT|\s+UNPIVOT)', query, re.IGNORECASE | re.DOTALL)
         if pivot_match:
             base_query = pivot_match.group(1)
@@ -1352,13 +1558,16 @@ class SQLTranslator:
             if not in_quotes and char == '(':
                 paren_depth += 1
                 if paren_depth == 1:
+                    # Start of new row
                     current_row = []
                     current_value = ""
             elif not in_quotes and char == ')':
                 paren_depth -= 1
                 if paren_depth == 0:
+                    # End of row - add current value if exists
                     if current_value.strip():
                         current_row.append(current_value.strip())
+                    # Clean up quotes from values in this row
                     cleaned_row = []
                     for val in current_row:
                         val = val.strip()
@@ -1368,17 +1577,22 @@ class SQLTranslator:
                     rows.append(cleaned_row)
             elif paren_depth > 0:
                 if not in_quotes and (char == '"' or char == "'"):
+                    # Start of quoted string
                     in_quotes = True
                     quote_char = char
                     current_value += char
                 elif in_quotes and char == quote_char:
+                    # End of quoted string (check for escaped quotes)
                     if i + 1 < len(values_str) and values_str[i + 1] == quote_char:
+                        # Escaped quote
                         current_value += char + char
                         i += 1  # Skip next character
                     else:
+                        # End of quoted string
                         in_quotes = False
                         current_value += char
                 elif not in_quotes and char == ',':
+                    # Comma separator within row
                     current_row.append(current_value.strip())
                     current_value = ""
                 else:
@@ -1400,17 +1614,22 @@ class SQLTranslator:
             char = values_str[i]
 
             if not in_quotes and (char == '"' or char == "'"):
+                # Start of quoted string
                 in_quotes = True
                 quote_char = char
                 current += char
             elif in_quotes and char == quote_char:
+                # End of quoted string (check for escaped quotes)
                 if i + 1 < len(values_str) and values_str[i + 1] == quote_char:
+                    # Escaped quote
                     current += char + char
                     i += 1  # Skip next character
                 else:
+                    # End of quoted string
                     in_quotes = False
                     current += char
             elif not in_quotes and char == ',':
+                # Comma separator
                 values.append(current.strip())
                 current = ""
             else:
@@ -1418,9 +1637,11 @@ class SQLTranslator:
 
             i += 1
 
+        # Add the last value
         if current.strip():
             values.append(current.strip())
 
+        # Clean up quotes from values
         cleaned_values = []
         for val in values:
             val = val.strip()
@@ -1447,6 +1668,7 @@ class SQLTranslator:
                 paren_depth -= 1
                 current += char
             elif char == ',' and paren_depth == 0:
+                # Found a comma at top level
                 if current.strip():
                     columns.append(current.strip())
                 current = ""
@@ -1455,6 +1677,7 @@ class SQLTranslator:
 
             i += 1
 
+        # Add the last column
         if current.strip():
             columns.append(current.strip())
 
@@ -1468,6 +1691,7 @@ class SQLTranslator:
             if select_clause.upper().strip() == '*':
                 return ['*']
             else:
+                # Simple column extraction
                 columns = [col.strip() for col in select_clause.split(',')]
                 return columns
         return []
@@ -1492,17 +1716,22 @@ class SQLTranslator:
             decrypted_row = {}
 
             for col_name, value in row.items():
+                # Skip tag columns - they're internal metadata
                 if col_name.startswith('tag_'):
                     continue
 
+                # Check if this column is encrypted based on table mapping
                 if col_name in table_mapping.encrypted_columns:
                     col_mapping = table_mapping.encrypted_columns[col_name]
                     if col_mapping.is_encrypted:
+                        # Decrypt encrypted column (stored as BLOB)
                         decryption_bytes = None
 
+                        # Handle different BYTEA formats from PostgreSQL
                         if isinstance(value, bytes):
                             decryption_bytes = value
                         elif isinstance(value, str) and value.startswith('\\x') and len(value) > 2:
+                            # PostgreSQL BYTEA hex format: \x52494646...
                             try:
                                 hex_part = value[2:]  # Remove \x prefix
                                 decryption_bytes = bytes.fromhex(hex_part)
@@ -1512,6 +1741,7 @@ class SQLTranslator:
                                 decrypted_row[col_name] = f"<INVALID_BYTEA_HEX:{str(value)[:20]}...>"
                                 continue
                         elif isinstance(value, str) and len(value) > 10 and all(c in '0123456789abcdefABCDEF' for c in value):
+                            # Pure hex string format
                             try:
                                 decryption_bytes = bytes.fromhex(value)
                                 logger.debug(f"Converted hex string to bytes for {col_name}, size: {len(decryption_bytes)}")
@@ -1523,6 +1753,7 @@ class SQLTranslator:
                             decrypted_row[col_name] = f"<INVALID_ENCRYPTED_DATA:{str(value)[:20]}...>"
                             continue
 
+                        # Now decrypt the bytes
                         if decryption_bytes is not None:
                             try:
                                 decrypted_value = clwe_encryptor.decrypt_value(decryption_bytes, settings.CRYPTOPIX_DEFAULT_PASSWORD)
@@ -1532,8 +1763,10 @@ class SQLTranslator:
                                 logger.warning(f"Failed to decrypt {col_name}: {e}")
                                 decrypted_row[col_name] = f"<DECRYPTION_FAILED:{str(value)[:20]}...>"
                     else:
+                        # Non-encrypted column in encrypted_columns mapping
                         decrypted_row[col_name] = value
                 else:
+                    # Normal column
                     decrypted_row[col_name] = value
 
             decrypted_rows.append(decrypted_row)
@@ -1541,4 +1774,5 @@ class SQLTranslator:
         return decrypted_rows
 
 
+# Global translator instance
 sql_translator = SQLTranslator()

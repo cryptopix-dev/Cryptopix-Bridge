@@ -39,6 +39,7 @@ class DatabaseAdapter:
         elif "mongodb" in url_lower:
             return DatabaseType.MONGODB
         else:
+            # Default to SQLite for file paths
             return DatabaseType.SQLITE
 
 def create_database_adapter(db_url: str) -> DatabaseAdapter:

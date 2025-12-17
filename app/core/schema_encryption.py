@@ -43,6 +43,7 @@ class SchemaEncryptionService:
         self.schema_cache: Dict[str, EncryptedSchema] = {}
         self.encryption_key = settings.CRYPTOPIX_DEFAULT_PASSWORD
 
+        # PostgreSQL-specific configurations
         self.postgresql_config = {
             "bytea_handling": True,
             "hex_encoding": True,
@@ -68,8 +69,10 @@ class SchemaEncryptionService:
         try:
             logger.info(f"Encrypting schema for database: {database_name} with level: {encryption_level.value}")
 
+            # Create AI context for the schema
             ai_context = self._generate_ai_context(schema_data)
 
+            # Encrypt based on level
             if encryption_level == SchemaEncryptionLevel.NONE:
                 encrypted_tables = schema_data.get('tables', {})
                 encryption_metadata = {"level": "none"}
@@ -86,6 +89,7 @@ class SchemaEncryptionService:
             else:
                 raise ValueError(f"Unknown encryption level: {encryption_level}")
 
+            # Create encrypted schema object
             encrypted_schema = EncryptedSchema(
                 database_name=database_name,
                 tables=encrypted_tables,
@@ -96,6 +100,7 @@ class SchemaEncryptionService:
                 version="3.0"
             )
 
+            # Cache the schema
             self.schema_cache[database_name] = encrypted_schema
 
             logger.info(f"Successfully encrypted schema for {database_name} with {len(encrypted_tables)} tables")
@@ -118,6 +123,7 @@ class SchemaEncryptionService:
         try:
             logger.info(f"Decrypting schema for database: {encrypted_schema.database_name}")
 
+            # Decrypt based on level
             if encrypted_schema.encryption_level == SchemaEncryptionLevel.NONE:
                 decrypted_tables = encrypted_schema.tables
 
@@ -133,6 +139,7 @@ class SchemaEncryptionService:
             else:
                 raise ValueError(f"Unknown encryption level: {encrypted_schema.encryption_level}")
 
+            # Return decrypted schema
             decrypted_schema = {
                 "database_name": encrypted_schema.database_name,
                 "tables": decrypted_tables,
@@ -209,6 +216,7 @@ class SchemaEncryptionService:
 
     def _encrypt_full(self, schema_data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """Full schema encryption - encrypt entire structure"""
+        # Serialize entire schema and encrypt as one blob
         schema_json = json.dumps(schema_data, sort_keys=True)
         encrypted_blob = clwe_encryptor.encrypt_value(schema_json, self.encryption_key)
 
@@ -238,19 +246,23 @@ class SchemaEncryptionService:
         if not encrypted_hex:
             raise ValueError("No encrypted schema data found")
 
+        # Decrypt the blob
         encrypted_bytes = bytes.fromhex(encrypted_hex)
         decrypted_json = clwe_encryptor.decrypt_value(encrypted_bytes, self.encryption_key)
 
+        # Parse back to schema
         return json.loads(decrypted_json)
 
     def _encrypt_ai_enhanced(self, schema_data: Dict[str, Any], ai_context: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """AI-enhanced schema encryption with semantic understanding"""
+        # Combine schema data with AI context
         enhanced_data = {
             "schema": schema_data,
             "ai_context": ai_context,
             "semantic_mappings": self._generate_semantic_mappings(schema_data, ai_context)
         }
 
+        # Use full encryption but keep AI context separately for performance
         schema_json = json.dumps(enhanced_data["schema"], sort_keys=True)
         encrypted_blob = clwe_encryptor.encrypt_value(schema_json, self.encryption_key)
 
@@ -282,11 +294,14 @@ class SchemaEncryptionService:
         if not encrypted_hex:
             raise ValueError("No encrypted schema data found")
 
+        # Decrypt the schema
         encrypted_bytes = bytes.fromhex(encrypted_hex)
         decrypted_json = clwe_encryptor.decrypt_value(encrypted_bytes, self.encryption_key)
 
+        # Parse and enhance with AI context
         schema_data = json.loads(decrypted_json)
 
+        # Add AI context back
         schema_data["ai_context"] = schema_blob.get("ai_context", {})
         schema_data["semantic_mappings"] = schema_blob.get("semantic_mappings", {})
 
@@ -321,6 +336,7 @@ class SchemaEncryptionService:
             "query_patterns": self._generate_query_patterns(schema_data)
         }
 
+        # Analyze table types
         for table_name, table_info in schema_data.get('tables', {}).items():
             table_type = self._classify_table_type(table_name, table_info)
             ai_context["table_types"][table_name] = table_type
@@ -331,6 +347,7 @@ class SchemaEncryptionService:
         """Classify table type based on structure and naming"""
         table_name_lower = table_name.lower()
 
+        # Common table type patterns
         if 'user' in table_name_lower or 'account' in table_name_lower:
             return "user_management"
         elif 'order' in table_name_lower or 'invoice' in table_name_lower:
@@ -352,7 +369,9 @@ class SchemaEncryptionService:
 
         for table_name, table_info in tables.items():
             for col_name, col_info in table_info.get('columns', {}).items():
+                # Look for foreign key patterns
                 if 'id' in col_name.lower() and col_name.lower() != 'id':
+                    # Potential foreign key
                     referenced_table = col_name.lower().replace('_id', '').replace('id', '')
                     if referenced_table in tables:
                         relationships.append({
@@ -377,6 +396,7 @@ class SchemaEncryptionService:
                 data_type = str(col_info.get('type', 'TEXT'))
                 patterns["data_types_used"].add(data_type)
 
+                # Count common column types
                 col_name = col_info.get('name', '').lower()
                 if col_name in patterns["common_column_types"]:
                     patterns["common_column_types"][col_name] += 1
@@ -391,6 +411,7 @@ class SchemaEncryptionService:
         patterns = []
 
         for table_name, table_info in schema_data.get('tables', {}).items():
+            # Basic SELECT patterns
             patterns.append({
                 "type": "select_all",
                 "table": table_name,
@@ -398,6 +419,7 @@ class SchemaEncryptionService:
                 "description": f"Get all records from {table_name}"
             })
 
+            # SELECT with LIMIT
             patterns.append({
                 "type": "select_limited",
                 "table": table_name,
@@ -405,6 +427,7 @@ class SchemaEncryptionService:
                 "description": f"Get first 10 records from {table_name}"
             })
 
+            # Check for ID columns for specific queries
             has_id = any('id' in col.get('name', '').lower() for col in table_info.get('columns', {}).values())
 
             if has_id:
@@ -425,10 +448,12 @@ class SchemaEncryptionService:
             "query_intents": {}
         }
 
+        # Generate table aliases
         for table_name in schema_data.get('tables', {}):
             aliases = self._generate_table_aliases(table_name)
             semantic_mappings["table_aliases"][table_name] = aliases
 
+        # Generate column synonyms
         for table_name, table_info in schema_data.get('tables', {}).items():
             for col_name in table_info.get('columns', {}):
                 synonyms = self._generate_column_synonyms(col_name)
@@ -442,11 +467,13 @@ class SchemaEncryptionService:
         aliases = []
         name_lower = table_name.lower()
 
+        # Remove common suffixes
         if name_lower.endswith('s'):
             aliases.append(name_lower[:-1])  # users -> user
         if name_lower.endswith('ies'):
             aliases.append(name_lower[:-3] + 'y')  # categories -> category
 
+        # Add common abbreviations
         if 'user' in name_lower:
             aliases.append('u')
         if 'product' in name_lower:
@@ -463,6 +490,7 @@ class SchemaEncryptionService:
         synonyms = []
         name_lower = column_name.lower()
 
+        # Common synonyms
         synonym_map = {
             'name': ['title', 'label', 'identifier'],
             'email': ['email_address', 'mail', 'e-mail'],
@@ -500,6 +528,7 @@ class SchemaEncryptionService:
             with open(file_path, 'r') as f:
                 schema_dict = json.load(f)
 
+            # Convert back to EncryptedSchema object
             encrypted_schema = EncryptedSchema(**schema_dict)
             logger.info(f"Loaded encrypted schema from {file_path}")
             return encrypted_schema
@@ -525,10 +554,13 @@ class SchemaEncryptionService:
         try:
             logger.info(f"Encrypting PostgreSQL schema for database: {database_name}")
 
+            # Enhance schema data with PostgreSQL-specific information
             postgresql_schema = self._enhance_postgresql_schema(schema_data)
 
+            # Use standard encryption but with PostgreSQL optimizations
             encrypted_schema = self.encrypt_schema(postgresql_schema, database_name, encryption_level)
 
+            # Add PostgreSQL-specific metadata
             encrypted_schema.encryption_metadata.update({
                 "database_type": "postgresql",
                 "bytea_optimized": True,
@@ -556,8 +588,10 @@ class SchemaEncryptionService:
         try:
             logger.info(f"Decrypting PostgreSQL schema for database: {encrypted_schema.database_name}")
 
+            # Use standard decryption
             decrypted_schema = self.decrypt_schema(encrypted_schema)
 
+            # Add PostgreSQL-specific enhancements
             decrypted_schema = self._restore_postgresql_schema(decrypted_schema)
 
             logger.info(f"Successfully decrypted PostgreSQL schema for {encrypted_schema.database_name}")
@@ -592,13 +626,16 @@ class SchemaEncryptionService:
     def _encrypt_for_postgresql_bytea(self, data: Any) -> str:
         """Encrypt data and format for PostgreSQL BYTEA storage"""
         try:
+            # Convert data to string if needed
             if isinstance(data, (dict, list)):
                 data_str = json.dumps(data, separators=(',', ':'))
             else:
                 data_str = str(data)
 
+            # Encrypt using CLWE
             encrypted_blob = clwe_encryptor.encrypt_value(data_str, self.encryption_key)
 
+            # Return as hex string for PostgreSQL BYTEA
             return encrypted_blob.hex()
 
         except Exception as e:
@@ -608,13 +645,16 @@ class SchemaEncryptionService:
     def _decrypt_from_postgresql_bytea(self, data: Any) -> Any:
         """Decrypt data from PostgreSQL BYTEA format"""
         try:
+            # Handle different input formats
             if isinstance(data, str):
+                # Check if it's PostgreSQL BYTEA hex format (\x...)
                 if data.startswith('\\x') and len(data) > 2:
                     hex_part = data[2:]  # Remove \x prefix
                     if len(hex_part) % 2 == 0 and all(c in '0123456789abcdefABCDEF' for c in hex_part):
                         encrypted_bytes = bytes.fromhex(hex_part)
                     else:
                         raise ValueError(f"Invalid PostgreSQL BYTEA hex format: {data}")
+                # Check if it's pure hex string
                 elif len(data) % 2 == 0 and all(c in '0123456789abcdefABCDEF' for c in data):
                     encrypted_bytes = bytes.fromhex(data)
                 else:
@@ -626,8 +666,10 @@ class SchemaEncryptionService:
             else:
                 raise ValueError(f"Unsupported data type for BYTEA decryption: {type(data)}")
 
+            # Decrypt using CLWE
             decrypted_str = clwe_encryptor.decrypt_value(encrypted_bytes, self.encryption_key)
 
+            # Try to parse as JSON, otherwise return as string
             try:
                 return json.loads(decrypted_str)
             except (json.JSONDecodeError, TypeError):
@@ -641,6 +683,7 @@ class SchemaEncryptionService:
         """Enhance schema data with PostgreSQL-specific information"""
         enhanced_schema = schema_data.copy()
 
+        # Add PostgreSQL-specific metadata
         enhanced_schema["postgresql_metadata"] = {
             "bytea_columns": [],
             "array_columns": [],
@@ -650,10 +693,12 @@ class SchemaEncryptionService:
             "domains": []
         }
 
+        # Analyze tables for PostgreSQL-specific features
         for table_name, table_info in schema_data.get('tables', {}).items():
             for col_name, col_info in table_info.get('columns', {}).items():
                 data_type = str(col_info.get('type', '')).upper()
 
+                # Identify BYTEA columns
                 if 'BYTEA' in data_type:
                     enhanced_schema["postgresql_metadata"]["bytea_columns"].append({
                         "table": table_name,
@@ -661,6 +706,7 @@ class SchemaEncryptionService:
                         "encrypted": True
                     })
 
+                # Identify array columns
                 if data_type.endswith('[]'):
                     enhanced_schema["postgresql_metadata"]["array_columns"].append({
                         "table": table_name,
@@ -668,6 +714,7 @@ class SchemaEncryptionService:
                         "element_type": data_type[:-2]
                     })
 
+                # Identify JSON columns
                 if 'JSON' in data_type:
                     enhanced_schema["postgresql_metadata"]["json_columns"].append({
                         "table": table_name,
@@ -681,8 +728,10 @@ class SchemaEncryptionService:
         """Restore PostgreSQL-specific features to decrypted schema"""
         restored_schema = decrypted_schema.copy()
 
+        # Add PostgreSQL-specific query helpers
         postgresql_metadata = decrypted_schema.get("postgresql_metadata", {})
 
+        # Generate BYTEA-specific query patterns
         if postgresql_metadata.get("bytea_columns"):
             restored_schema["postgresql_helpers"] = {
                 "bytea_insert_pattern": "INSERT INTO {table} ({columns}) VALUES ({values})",
@@ -750,16 +799,19 @@ class SchemaEncryptionService:
         }
 
         try:
+            # Check data size (PostgreSQL BYTEA has practical limits)
             if isinstance(data, (bytes, str)):
                 data_size = len(data) if isinstance(data, bytes) else len(data.encode('utf-8'))
                 if data_size > 100 * 1024 * 1024:  # 100MB limit
                     validation_result["warnings"].append("Data size exceeds recommended limit for BYTEA")
                     validation_result["recommendations"].append("Consider using Large Object storage for data > 100MB")
 
+            # Check for null bytes that might cause issues
             if isinstance(data, bytes) and b'\x00' in data:
                 validation_result["warnings"].append("Data contains null bytes which may cause issues")
                 validation_result["recommendations"].append("Consider base64 encoding for data with null bytes")
 
+            # Check for high Unicode characters
             if isinstance(data, str):
                 high_unicode = [ord(c) for c in data if ord(c) > 0xFFFF]
                 if high_unicode:
@@ -773,4 +825,5 @@ class SchemaEncryptionService:
         return validation_result
 
 
+# Global schema encryption service instance
 schema_encryption_service = SchemaEncryptionService()

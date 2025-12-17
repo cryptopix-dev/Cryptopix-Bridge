@@ -12,20 +12,24 @@ import os
 
 from app.config import settings
 
+# Global database engines and session factories
 _engines = {}
 _session_factories = {}
 
 def _get_database_url(db_type: str = "encrypted") -> str:
     """Get database URL for the specified type"""
     if db_type == "encrypted":
+        # Try to get from migration state first
         try:
             from pathlib import Path
             import json
 
             schemas_dir = Path("schemas")
             if schemas_dir.exists():
+                # Find migration state files
                 state_files = list(schemas_dir.glob("*_migration_state.json"))
                 if state_files:
+                    # Load the most recent completed migration state
                     completed_states = []
                     for state_file in state_files:
                         try:
@@ -41,10 +45,12 @@ def _get_database_url(db_type: str = "encrypted") -> str:
                         encrypted_url = migration_state.get('encrypted_db_url')
                         if encrypted_url:
                             print(f"Using encrypted DB URL from migration state: {encrypted_url}")
+                            # Ensure MySQL URLs use PyMySQL driver
                             if encrypted_url.startswith('mysql://'):
                                 encrypted_url = encrypted_url.replace('mysql://', 'mysql+pymysql://', 1)
                             return encrypted_url
 
+                    # Also check for any migration state file, even if not complete
                     state_files = list(schemas_dir.glob("*_migration_state.json"))
                     if state_files:
                         latest_state = max(state_files, key=lambda f: f.stat().st_mtime)
@@ -53,18 +59,22 @@ def _get_database_url(db_type: str = "encrypted") -> str:
                             encrypted_url = state_data.get('encrypted_db_url')
                             if encrypted_url:
                                 print(f"Using encrypted DB URL from latest migration state: {encrypted_url}")
+                                # Ensure MySQL URLs use PyMySQL driver
                                 if encrypted_url.startswith('mysql://'):
                                     encrypted_url = encrypted_url.replace('mysql://', 'mysql+pymysql://', 1)
                                 return encrypted_url
         except Exception as e:
             print(f"Failed to load encrypted DB URL from migration state: {e}")
 
+        # Fall back to settings
         encrypted_url = settings.ENCRYPTED_DB_URL
         print(f"Using encrypted DB URL from settings: {encrypted_url}")
+        # Ensure MySQL URLs use PyMySQL driver
         if encrypted_url.startswith('mysql://'):
             encrypted_url = encrypted_url.replace('mysql://', 'mysql+pymysql://', 1)
         return encrypted_url
     elif db_type == "source":
+        # Try to get from migration state
         try:
             from pathlib import Path
             import json
@@ -78,13 +88,16 @@ def _get_database_url(db_type: str = "encrypted") -> str:
                         state_data = json.load(f)
                         source_url = state_data.get('source_db_url')
                         if source_url:
+                            # Ensure MySQL URLs use PyMySQL driver
                             if source_url.startswith('mysql://'):
                                 source_url = source_url.replace('mysql://', 'mysql+pymysql://', 1)
                             return source_url
         except Exception:
             pass  # Fall back to settings
 
+        # Fall back to settings
         source_url = settings.SOURCE_DB_URL
+        # Ensure MySQL URLs use PyMySQL driver
         if source_url.startswith('mysql://'):
             source_url = source_url.replace('mysql://', 'mysql+pymysql://', 1)
         return source_url

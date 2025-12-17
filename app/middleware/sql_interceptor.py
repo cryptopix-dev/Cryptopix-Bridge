@@ -32,6 +32,7 @@ class SQLInterceptor:
             'UNION': re.compile(r'\bUNION\b', re.IGNORECASE),  # For UNION queries
         }
 
+        # Table mappings cache
         self.table_mappings: Dict[str, TableMapping] = {}
 
     def register_table_mapping(self, table_name: str, mapping: TableMapping):
@@ -61,6 +62,7 @@ class SQLInterceptor:
         try:
             logger.info(f"Intercepting query from user {user_id}: {query[:100]}...")
 
+            # Parse query to extract table/collection name
             table_name = self._extract_table_name(query)
             if not table_name:
                 return {
@@ -69,6 +71,7 @@ class SQLInterceptor:
                     "original_query": query
                 }
 
+            # Check if table has mapping
             if table_name not in self.table_mappings:
                 logger.warning(f"No mapping found for table {table_name}, available mappings: {list(self.table_mappings.keys())}, passing through unchanged")
                 return {
@@ -80,6 +83,7 @@ class SQLInterceptor:
                     "database_type": sql_translator.database_type
                 }
 
+            # Translate query
             table_mapping = self.table_mappings[table_name]
             translated_result = sql_translator.translate_query(query, table_name)
 
@@ -92,6 +96,7 @@ class SQLInterceptor:
 
             translated_query, metadata = translated_result
 
+            # Audit the query
             if user_id:
                 await self._audit_query(
                     query, translated_query, table_name, user_id, client_ip, metadata
@@ -121,20 +126,26 @@ class SQLInterceptor:
     def _extract_table_name(self, query: str) -> Optional[str]:
         """Extract table name from SQL query"""
         try:
+            # For SHOW TABLES and similar commands, return a dummy table name
             query_upper = query.strip().upper()
             if query_upper.startswith(('SHOW', 'DESCRIBE', 'EXPLAIN')):
                 return "system_tables"  # Dummy table name for system queries
 
+            # Remove extra whitespace and normalize
             query = re.sub(r'\s+', ' ', query.strip())
 
+            # Handle CTEs - extract from main query
             if query.upper().startswith('WITH'):
+                # Find the main SELECT after WITH clause
                 main_query_match = re.search(r'WITH\s+.*?\s+SELECT', query, re.IGNORECASE | re.DOTALL)
                 if main_query_match:
                     query = query[main_query_match.end() - 6:]  # Start from SELECT
 
+            # Handle UNION - take first SELECT
             if 'UNION' in query.upper():
                 query = query.split('UNION')[0]
 
+            # Try different patterns
             patterns = [
                 r'\bFROM\s+(\w+)',
                 r'\bINSERT\s+INTO\s+(\w+)',
@@ -165,6 +176,7 @@ class SQLInterceptor:
                           metadata: Dict[str, Any]):
         """Audit SQL query execution"""
         try:
+            # Determine query type
             query_type = "unknown"
             if original_query.strip().upper().startswith("SELECT"):
                 query_type = "select"
@@ -212,16 +224,20 @@ class SQLInterceptor:
             Query execution result
         """
         try:
+            # Handle MongoDB queries
             if isinstance(translated_query, dict) and sql_translator.database_type == "mongodb":
                 return await self._execute_mongodb_query(translated_query, table_name, user_id)
 
+            # Execute SQL query on encrypted database
             with get_db_session("encrypted") as session:
                 result = session.execute(text(translated_query))
 
+                # Handle different query types
                 if translated_query.strip().upper().startswith("SELECT"):
                     rows = result.fetchall()
                     column_names = result.keys()
 
+                    # Convert to list of dicts
                     raw_results = []
                     for row in rows:
                         row_dict = {}
@@ -229,6 +245,7 @@ class SQLInterceptor:
                             row_dict[column_name] = row[i]
                         raw_results.append(row_dict)
 
+                    # Decrypt results if table mapping exists
                     if table_name in self.table_mappings:
                         table_mapping = self.table_mappings[table_name]
                         decrypted_results = sql_translator.decrypt_query_results(raw_results, table_mapping)
@@ -245,8 +262,10 @@ class SQLInterceptor:
                     }
 
                 else:
+                    # For INSERT, UPDATE, DELETE
                     session.commit()
 
+                    # Get affected row count
                     if hasattr(result, 'rowcount'):
                         affected_rows = result.rowcount
                     else:
@@ -269,6 +288,7 @@ class SQLInterceptor:
         except Exception as e:
             logger.error(f"Query execution failed: {e}")
 
+            # Rollback on error
             try:
                 with get_db_session("encrypted") as session:
                     session.rollback()
@@ -284,9 +304,11 @@ class SQLInterceptor:
     async def _execute_mongodb_query(self, mongo_query: Dict[str, Any], collection_name: str, user_id: Optional[str] = None) -> Dict[str, Any]:
         """Execute MongoDB query"""
         try:
+            # Import MongoDB driver
             from pymongo import MongoClient
             from app.config import settings
 
+            # Connect to MongoDB
             client = MongoClient(settings.ENCRYPTED_DB_URL)
             db = client[settings.MONGODB_DATABASE or "cryptopix_bridge"]
             collection = db[collection_name]
@@ -294,6 +316,7 @@ class SQLInterceptor:
             operation = mongo_query.get("operation")
 
             if operation == "find":
+                # Execute find operation
                 filter_doc = mongo_query.get("filter", {})
                 limit = mongo_query.get("limit")
 
@@ -303,6 +326,7 @@ class SQLInterceptor:
 
                 results = list(cursor)
 
+                # Decrypt results if mapping exists
                 if collection_name in self.table_mappings:
                     table_mapping = self.table_mappings[collection_name]
                     decrypted_results = sql_translator.decrypt_query_results(results, table_mapping)
@@ -320,6 +344,7 @@ class SQLInterceptor:
                 }
 
             elif operation == "insert_one":
+                # Execute insert operation
                 document = mongo_query.get("document", {})
                 result = collection.insert_one(document)
                 client.close()
@@ -332,6 +357,7 @@ class SQLInterceptor:
                 }
 
             elif operation == "update_many":
+                # Execute update operation
                 filter_doc = mongo_query.get("filter", {})
                 update_doc = mongo_query.get("update", {})
                 result = collection.update_many(filter_doc, update_doc)
@@ -345,6 +371,7 @@ class SQLInterceptor:
                 }
 
             elif operation == "delete_many":
+                # Execute delete operation
                 filter_doc = mongo_query.get("filter", {})
                 result = collection.delete_many(filter_doc)
                 client.close()
@@ -421,18 +448,22 @@ class SQLInterceptor:
         }
 
 
+# Global SQL interceptor instance
 sql_interceptor = SQLInterceptor()
 
 
+# Convenience functions
 async def intercept_and_execute_query(query: str,
                                     user_id: Optional[str] = None,
                                     client_ip: Optional[str] = None) -> Dict[str, Any]:
     """Convenience function to intercept and execute a query"""
+    # Intercept query
     intercept_result = await sql_interceptor.intercept_query(query, user_id, client_ip)
 
     if not intercept_result["success"]:
         return intercept_result
 
+    # Execute translated query
     if intercept_result["translated"]:
         execution_result = await sql_interceptor.execute_translated_query(
             intercept_result["translated_query"],
@@ -440,11 +471,13 @@ async def intercept_and_execute_query(query: str,
             user_id
         )
 
+        # Combine results
         return {
             **intercept_result,
             **execution_result
         }
     else:
+        # Query was not translated, execute as-is
         execution_result = await sql_interceptor.execute_translated_query(
             query,
             intercept_result["table_name"],

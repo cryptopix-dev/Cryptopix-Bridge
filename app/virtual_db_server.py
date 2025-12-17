@@ -19,6 +19,7 @@ import random
 import re
 from pathlib import Path
 
+# Database protocol libraries
 try:
     import pymysql
     from pymysql.connections import Connection
@@ -51,10 +52,12 @@ from app.core.database_adapters import DatabaseType
 logger = logging.getLogger(__name__)
 
 
+# MySQL Protocol Constants
 MYSQL_PROTOCOL_VERSION = 10
 MYSQL_SERVER_VERSION = "8.0.32-CryptoPIX"
 MYSQL_DEFAULT_CHARSET = 255
 
+# MySQL Capability Flags
 CLIENT_LONG_PASSWORD = 0x00000001
 CLIENT_FOUND_ROWS = 0x00000002
 CLIENT_LONG_FLAG = 0x00000004
@@ -108,6 +111,7 @@ MYSQL_DEFAULT_CAPABILITIES = (
     CLIENT_DEPRECATE_EOF
 )
 
+# MySQL Status Flags
 SERVER_STATUS_IN_TRANS = 0x0001
 SERVER_STATUS_AUTOCOMMIT = 0x0002
 SERVER_MORE_RESULTS_EXISTS = 0x0008
@@ -125,6 +129,7 @@ SERVER_SESSION_STATE_CHANGED = 0x4000
 
 MYSQL_DEFAULT_STATUS = SERVER_STATUS_AUTOCOMMIT
 
+# MySQL Command Types
 COM_SLEEP = 0x00
 COM_QUIT = 0x01
 COM_INIT_DB = 0x02
@@ -158,6 +163,7 @@ COM_DAEMON = 0x1d
 COM_BINLOG_DUMP_GTID = 0x1e
 COM_RESET_CONNECTION = 0x1f
 
+# MySQL Response Types
 OK_PACKET = 0x00
 ERR_PACKET = 0xff
 EOF_PACKET = 0xfe
@@ -188,6 +194,7 @@ class VDSInstance:
         self.host = host
         self.port = port
         self.encrypted_db_url = encrypted_db_url or settings.ENCRYPTED_DB_URL
+        # Ensure MySQL URLs use PyMySQL driver
         if self.encrypted_db_url.startswith('mysql://'):
             self.encrypted_db_url = self.encrypted_db_url.replace(
                 'mysql://', 'mysql+pymysql://', 1)
@@ -195,34 +202,43 @@ class VDSInstance:
         self.max_connections = max_connections
         self.table_mappings = table_mappings or {}
 
+        # Per-instance service instances - no global sharing
         from app.services.console_service import ConsoleService
         from app.services.ai_assistant import AIAssistant
         self.console_service = ConsoleService()
         self.ai_assistant = AIAssistant()
 
+        # Per-instance migration state
         self.migration_state = migration_state
         if not self.migration_state:
             self.migration_state = self.console_service._load_migration_state_from_files(
                 self.encrypted_db_url)
 
+        # Per-instance resources
         self.running = False
         self.server_socket = None
         self.executor = ThreadPoolExecutor(
             max_workers=max_connections, thread_name_prefix=f'VDS-{host}-{port}')
 
+        # Per-instance connection tracking
         self.active_connections = {}
         self.connection_counter = 0
         self.connection_lock = threading.Lock()
 
+        # Per-instance schema cache
         self.schema_cache = {}
         self.cache_lock = threading.Lock()
 
+        # Per-instance prepared statement cache
+        # Format: {connection_id: {stmt_id: {'sql': str, 'params': list, 'num_params': int}}}
         self.prepared_statements = {}
         self.stmt_counter = 0
         self.stmt_lock = threading.Lock()
 
+        # Per-instance accept thread
         self.accept_thread = None
 
+        # Initialize per-instance components
         self._setup_schema_mappings()
         self._setup_encryption_engine()
 
@@ -235,10 +251,12 @@ class VDSInstance:
     def _setup_schema_mappings(self):
         """Setup schema mappings for translating normal column names to encrypted equivalents"""
         try:
+            # Load migration state using the same method as console service
             if not hasattr(self, 'migration_state') or not self.migration_state:
                 self.migration_state = self.console_service._load_migration_state_from_files(
                     self.encrypted_db_url)
             
+            # Ensure the console service has the migration state set
             self.console_service.migration_state = self.migration_state
 
             logger.info(
@@ -248,14 +266,17 @@ class VDSInstance:
                     f"Migration state keys: {list(self.migration_state.keys())}")
                 if self.migration_state.get("encrypted_db_url"):
                     self.encrypted_db_url = self.migration_state["encrypted_db_url"]
+                    # Ensure MySQL URLs use PyMySQL driver
                     if self.encrypted_db_url.startswith('mysql://'):
                         self.encrypted_db_url = self.encrypted_db_url.replace(
                             'mysql://', 'mysql+pymysql://', 1)
                     logger.info(
                         f"Using encrypted DB URL from migration state: {self.encrypted_db_url}")
 
+            # Register table mappings using the same method as console service
             self.console_service._register_table_mappings()
 
+            # Get table mappings from console service's database_mappings
             database_key = self.console_service._get_database_key()
             if database_key in self.console_service.database_mappings:
                 self.table_mappings = self.console_service.database_mappings[database_key].copy()
@@ -265,17 +286,20 @@ class VDSInstance:
                 logger.warning(f"No database mappings found for key: {database_key}")
                 self.table_mappings = {}
 
+            # Also get database schemas if available
             self.database_schemas = {}
 
             logger.info(
                 f"VDS Instance table_mappings: {list(self.table_mappings.keys())}")
 
+            # Set database type for translators
             from app.services import enhanced_sql_translator
             from app.middleware.sql_interceptor import sql_interceptor
             from app.services.sql_translator import sql_translator
             sql_translator.set_database_type(self.encrypted_db_url)
             sql_interceptor.set_database_type(self.encrypted_db_url)
 
+            # Debug: Log detailed mapping info
             for table_name, mapping in self.table_mappings.items():
                 logger.info(
                     f"VDS Instance Table {table_name} mapping: encrypted_cols={list(mapping.encrypted_columns.keys())}, non_encrypted={mapping.non_encrypted_columns}")
@@ -285,6 +309,7 @@ class VDSInstance:
                 f"Failed to setup schema mappings in VDS Instance: {e}")
             import traceback
             logger.error(traceback.format_exc())
+            # Set empty mappings as fallback
             self.table_mappings = {}
             self.database_schemas = {}
             logger.warning("VDS Instance using empty table mappings")
@@ -292,6 +317,7 @@ class VDSInstance:
     def _setup_encryption_engine(self):
         """Setup encryption engine for transparent data handling"""
         try:
+            # Verify CLWE encryption is working
             test_data = "test_encryption"
             encrypted = clwe_encryptor.encrypt_value(
                 test_data, settings.CRYPTOPIX_DEFAULT_PASSWORD)
@@ -322,6 +348,7 @@ class VDSInstance:
                 socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.server_socket.bind((self.host, self.port))
             self.server_socket.listen(self.max_connections)
+            # Non-blocking accept to allow immediate shutdown
             self.server_socket.settimeout(0.1)
             self.running = True
 
@@ -330,6 +357,7 @@ class VDSInstance:
             logger.info(
                 f"Accepting {self.target_protocol} connections with transparent encryption")
 
+            # Start accepting connections in a dedicated thread
             self.accept_thread = threading.Thread(
                 target=self._accept_connections, daemon=True, name=f'VDS-Accept-{self.host}-{self.port}')
             self.accept_thread.start()
@@ -345,13 +373,16 @@ class VDSInstance:
             logger.info(f"Stopping VDS Instance {self.host}:{self.port}...")
             self.running = False
 
+            # Join the accept thread with timeout
             if self.accept_thread and self.accept_thread.is_alive():
                 self.accept_thread.join(timeout=timeout)
                 if self.accept_thread.is_alive():
                     logger.warning(
                         f"Accept thread for {self.host}:{self.port} did not terminate within {timeout}s")
 
+            # Close all active connections
             with self.connection_lock:
+                # Create a copy of items to avoid runtime error during iteration
                 active_conns = list(self.active_connections.items())
                 for conn_id, conn_info in active_conns:
                     try:
@@ -365,6 +396,7 @@ class VDSInstance:
                             f"Error closing connection {conn_id}: {e}")
                 self.active_connections.clear()
 
+            # Close server socket
             if self.server_socket:
                 try:
                     self.server_socket.shutdown(socket.SHUT_RDWR)
@@ -374,6 +406,7 @@ class VDSInstance:
                         f"Error closing server socket for {self.host}:{self.port}: {e}")
                 self.server_socket = None
 
+            # Shutdown executor with timeout
             self.executor.shutdown(wait=True, timeout=timeout)
 
             logger.info(
@@ -389,6 +422,7 @@ class VDSInstance:
             try:
                 client_socket, client_address = self.server_socket.accept()
 
+                # Check connection limit
                 with self.connection_lock:
                     if len(self.active_connections) >= self.max_connections:
                         logger.warning(
@@ -409,12 +443,15 @@ class VDSInstance:
                 logger.info(
                     f"VDS Instance {self.host}:{self.port}: New connection {connection_id} from {client_address}")
 
+                # Handle connection in separate thread
                 self.executor.submit(
                     self._handle_connection, connection_id, client_socket, client_address)
 
             except socket.timeout:
+                # Timeout occurred, check if we should still be running
                 continue
             except OSError:
+                # Socket was closed
                 break
             except Exception as e:
                 if not self.running:
@@ -428,6 +465,7 @@ class VDSInstance:
             if self.target_protocol == "mysql":
                 self._handle_mysql_connection_logic(connection_id, client_socket)
             else:
+                # For other protocols, send simple acknowledgment
                 greeting = b"VDS Ready\n"
                 client_socket.sendall(greeting)
                 
@@ -435,11 +473,13 @@ class VDSInstance:
                     data = client_socket.recv(4096)
                     if not data:
                         break
+                    # Simple echo for now
                     client_socket.sendall(f"Received: {len(data)} bytes\n".encode())
 
         except Exception as e:
             logger.error(f"Error in connection handler {connection_id}: {e}")
         finally:
+            # Clean up connection
             try:
                 client_socket.close()
             except:
@@ -454,6 +494,7 @@ class VDSInstance:
         try:
             logger.info(f"Handling MySQL connection {connection_id}")
 
+            # Send greeting packet
             greeting_packet = self._build_mysql_greeting_packet()
             if not greeting_packet:
                 logger.error("Failed to build greeting packet")
@@ -462,8 +503,10 @@ class VDSInstance:
             client_socket.send(greeting_packet)
             logger.info(f"Sent MySQL greeting to connection {connection_id} (seq 0)")
 
+            # Handle handshake response first
             sequence_number = 1  # Greeting was sequence 0
 
+            # Receive handshake response with improved error handling
             header = b""
             while len(header) < 4:
                 chunk = client_socket.recv(4 - len(header))
@@ -475,6 +518,7 @@ class VDSInstance:
             packet_length = struct.unpack('<I', header[:3] + b'\x00')[0]
             packet_seq = header[3]
 
+            # Validate packet length
             if packet_length > 16 * 1024 * 1024:  # 16MB max
                 logger.error(f"Handshake packet too large: {packet_length} bytes")
                 return
@@ -487,21 +531,26 @@ class VDSInstance:
                     return
                 packet_body += chunk
 
+            # Process handshake response
             if not self._process_mysql_handshake_response(packet_body, connection_id):
                 logger.error(f"Handshake failed for connection {connection_id}")
                 return
 
+            # Send OK packet to acknowledge authentication
             sequence_number = (packet_seq + 1) % 256
             ok_packet = self._build_mysql_ok_packet(sequence_number)
             client_socket.send(ok_packet)
             logger.info(f"Sent auth OK packet with seq {sequence_number}")
             sequence_number = (sequence_number + 1) % 256
 
+            # Mark as authenticated
             if connection_id in self.active_connections:
                 self.active_connections[connection_id]['authenticated'] = True
 
+            # Now handle subsequent packets (queries)
             while self.running:
                 try:
+                    # Receive packet header
                     header = b""
                     while len(header) < 4:
                         chunk = client_socket.recv(4 - len(header))
@@ -515,11 +564,14 @@ class VDSInstance:
                     packet_length = struct.unpack('<I', header[:3] + b'\x00')[0]
                     packet_seq = header[3]
 
+                    # Validate packet length
                     if packet_length > 16 * 1024 * 1024:
                         break
 
+                    # Update sequence number based on received packet
                     sequence_number = (packet_seq + 1) % 256
 
+                    # Receive packet body
                     packet_body = b""
                     while len(packet_body) < packet_length:
                         remaining = packet_length - len(packet_body)
@@ -531,30 +583,38 @@ class VDSInstance:
                     if len(packet_body) != packet_length:
                         break
 
+                    # Process packet based on first byte
                     if packet_body:
                         packet_type = packet_body[0]
 
                         if packet_type == COM_QUIT:
                             logger.info(f"Client {connection_id} sent COM_QUIT")
+                            # Clean up prepared statements for this connection
                             with self.stmt_lock:
                                 if connection_id in self.prepared_statements:
                                     del self.prepared_statements[connection_id]
                             break
                             
                         elif packet_type == COM_QUERY:
+                            # Handle SQL query
                             query = packet_body[1:].decode('utf-8', errors='ignore')
                             logger.info(f"COM_QUERY from {connection_id}: {query[:100]}...")
 
                             response_packets = self._process_mysql_query(query, connection_id, sequence_number)
+                            # Handle both list of packets and single concatenated bytes
                             if response_packets:
                                 if len(response_packets) == 1 and isinstance(response_packets[0], bytes):
+                                    # Single item - could be concatenated packets or single packet
                                     client_socket.sendall(response_packets[0])
                                 else:
+                                    # Multiple packets
                                     for packet in response_packets:
                                         if isinstance(packet, bytes):
                                             client_socket.sendall(packet)
+                            # Don't update sequence_number here - it's managed in _process_mysql_query
                             
                         elif packet_type == COM_STMT_PREPARE:
+                            # Handle prepared statement preparation
                             query = packet_body[1:].decode('utf-8', errors='ignore')
                             logger.info(f"COM_STMT_PREPARE from {connection_id}: {query[:100]}...")
                             
@@ -565,6 +625,7 @@ class VDSInstance:
                                         client_socket.sendall(packet)
                                         
                         elif packet_type == COM_STMT_EXECUTE:
+                            # Handle prepared statement execution
                             logger.info(f"COM_STMT_EXECUTE from {connection_id}")
                             
                             response_packets = self._handle_stmt_execute(packet_body, connection_id, sequence_number)
@@ -577,6 +638,7 @@ class VDSInstance:
                                             client_socket.sendall(packet)
                                             
                         elif packet_type == COM_STMT_CLOSE:
+                            # Handle prepared statement close
                             if len(packet_body) >= 5:
                                 stmt_id = struct.unpack('<I', packet_body[1:5])[0]
                                 logger.info(f"COM_STMT_CLOSE from {connection_id}, stmt_id={stmt_id}")
@@ -586,8 +648,10 @@ class VDSInstance:
                                         if stmt_id in self.prepared_statements[connection_id]:
                                             del self.prepared_statements[connection_id][stmt_id]
                                             logger.info(f"Closed prepared statement {stmt_id}")
+                            # No response needed for COM_STMT_CLOSE
                             
                         elif packet_type == COM_INIT_DB:
+                            # Handle database selection
                             db_name = packet_body[1:].decode('utf-8', errors='ignore')
                             logger.info(f"COM_INIT_DB from {connection_id}: {db_name}")
                             if connection_id in self.active_connections:
@@ -597,12 +661,14 @@ class VDSInstance:
                             sequence_number = (sequence_number + 1) % 256
                             
                         elif packet_type == COM_PING:
+                            # Handle ping
                             logger.debug(f"COM_PING from {connection_id}")
                             ok_packet = self._build_mysql_ok_packet(sequence_number)
                             client_socket.send(ok_packet)
                             sequence_number = (sequence_number + 1) % 256
                             
                         elif packet_type == COM_STMT_RESET:
+                            # Handle statement reset
                             if len(packet_body) >= 5:
                                 stmt_id = struct.unpack('<I', packet_body[1:5])[0]
                                 logger.info(f"COM_STMT_RESET from {connection_id}, stmt_id={stmt_id}")
@@ -611,6 +677,7 @@ class VDSInstance:
                             sequence_number = (sequence_number + 1) % 256
                             
                         else:
+                            # Unknown command - send OK
                             logger.warning(f"Unknown command type 0x{packet_type:02x} from {connection_id}")
                             ok_packet = self._build_mysql_ok_packet(sequence_number)
                             client_socket.send(ok_packet)
@@ -648,6 +715,7 @@ class VDSInstance:
             query_type = self._analyze_query_type(query) 
             logger.info(f"Processing {query_type} query: {query[:50]}...")
             
+            # DEBUG TRACE
             try:
                  with open('d:\\CPIXFINALWITHALLFEATURES\\debug_vds.txt', 'a') as f:
                      f.write(f"VDS Process: {query} -> Type: {query_type}\\n")
@@ -657,6 +725,7 @@ class VDSInstance:
                 result = self._execute_query(query, connection_id)
                 if not result.get("success", False):
                     return [self._build_mysql_error_packet(result.get("error", "Unknown error"))]
+                # Return list containing the concatenated result set packets
                 return [self._build_mysql_result_set_packets(result, sequence_number)]
                 
             elif query_type in ("INSERT", "UPDATE", "DELETE"):
@@ -672,6 +741,7 @@ class VDSInstance:
                 return self._handle_show_mysql_command(query, sequence_number)
                 
             elif query_type == "TRANSACTION":
+                 # Simple OK for now
                 return [self._build_mysql_ok_packet(sequence_number)]
 
             elif query_type == "SET":
@@ -706,6 +776,7 @@ class VDSInstance:
     def _handle_ddl_query(self, query: str, connection_id: int, sequence_number: int) -> List[bytes]:
         """Handle DDL queries using console service for consistent table mapping access"""
         try:
+            # Use console service to ensure proper table mapping and migration state handling
             result = self._execute_query(query, connection_id)
             if result.get("success"):
                 return [self._build_mysql_ok_packet(sequence_number)]
@@ -725,23 +796,28 @@ class VDSInstance:
         
         if "TABLES" in query_upper:
              try:
+                 # First try to get from table_mappings
                  tables = list(self.table_mappings.keys()) if hasattr(self, 'table_mappings') and self.table_mappings else []
                  logger.info(f"VDS table_mappings has {len(tables)} tables: {tables}")
                  
                  if tables:
+                     # Use table mappings
                      rows = [[t] for t in tables]
                      result = {"success": True, "query_type": "SELECT", "columns": ["Tables_in_encrypted_db"], "rows": rows}
                      logger.info(f"Returning {len(rows)} tables from table_mappings")
                      return [self._build_mysql_result_set_packets(result, sequence_number)]
                  else:
+                     # Fallback: query console service
                      logger.info("No table_mappings, querying console service for SHOW TABLES")
                      res = self._execute_query("SHOW TABLES", 0)
                      logger.info(f"Console service SHOW TABLES result: success={res.get('success')}, rows={len(res.get('rows', []))}")
                      
                      if res.get("success") and res.get("rows"):
+                         # Console service returned results
                          logger.info(f"Returning {len(res.get('rows', []))} tables from console service")
                          return [self._build_mysql_result_set_packets(res, sequence_number)]
                      else:
+                         # No tables found, return empty result
                          logger.warning("No tables found in console service result")
                          result = {"success": True, "query_type": "SELECT", "columns": ["Tables_in_encrypted_db"], "rows": []}
                          return [self._build_mysql_result_set_packets(result, sequence_number)]
@@ -749,6 +825,7 @@ class VDSInstance:
                  logger.error(f"Error handling SHOW TABLES: {e}")
                  return [self._build_mysql_error_packet(f"Error: {str(e)}")]
 
+        # Default fall through for other SHOW commands
         result = self._execute_query(query, 0)
         if result.get("success", False):
              if result.get("query_type") == "SELECT":
@@ -784,18 +861,23 @@ class VDSInstance:
     def _describe_table(self, table_name: str) -> Dict[str, Any]:
         return {"success": False, "error": "Not implemented"}
 
+    # Prepared Statement Handlers
     def _handle_stmt_prepare(self, query: str, connection_id: int, sequence_number: int) -> List[bytes]:
         """Handle COM_STMT_PREPARE - prepare a statement and return metadata"""
         try:
+            # Generate statement ID
             with self.stmt_lock:
                 self.stmt_counter += 1
                 stmt_id = self.stmt_counter
                 
+                # Initialize connection's prepared statements if needed
                 if connection_id not in self.prepared_statements:
                     self.prepared_statements[connection_id] = {}
                 
+                # Count parameters in the query
                 num_params = query.count('?')
                 
+                # Store prepared statement
                 self.prepared_statements[connection_id][stmt_id] = {
                     'sql': query,
                     'num_params': num_params,
@@ -804,6 +886,8 @@ class VDSInstance:
                 
             logger.info(f"Prepared statement {stmt_id} with {num_params} parameters: {query[:100]}...")
             
+            # Build COM_STMT_PREPARE_OK response
+            # Format: [header] status(0x00) stmt_id(4) num_columns(2) num_params(2) reserved(1) warning_count(2)
             response = self._build_stmt_prepare_ok(stmt_id, num_params, sequence_number)
             
             return [response]
@@ -820,8 +904,10 @@ class VDSInstance:
             if len(packet_body) < 5:
                 return [self._build_mysql_error_packet("Invalid COM_STMT_EXECUTE packet", sequence_number)]
             
+            # Parse statement ID (bytes 1-4)
             stmt_id = struct.unpack('<I', packet_body[1:5])[0]
             
+            # Get prepared statement
             with self.stmt_lock:
                 if connection_id not in self.prepared_statements:
                     return [self._build_mysql_error_packet(f"No prepared statements for connection {connection_id}", sequence_number)]
@@ -836,6 +922,7 @@ class VDSInstance:
             
             logger.info(f"Executing prepared statement {stmt_id}: {sql_template[:100]}... with {num_params} params")
             
+            # Parse parameters from packet
             params = []
             if num_params > 0:
                 try:
@@ -843,11 +930,14 @@ class VDSInstance:
                     logger.info(f"Parsed {len(params)} parameters: {params}")
                 except Exception as e:
                     logger.error(f"Error parsing parameters: {e}")
+                    # Continue with empty params - better than failing
                     params = [None] * num_params
             
+            # Build final SQL by replacing ? with actual values
             final_sql = self._build_sql_from_template(sql_template, params)
             logger.info(f"Final SQL to execute: {final_sql[:200]}...")
             
+            # Execute the query using the normal query path (which handles encryption)
             response_packets = self._process_mysql_query(final_sql, connection_id, sequence_number)
             
             return response_packets if response_packets else [self._build_mysql_error_packet("Query execution failed", sequence_number)]
@@ -861,6 +951,17 @@ class VDSInstance:
     def _parse_stmt_execute_params(self, packet_body: bytes, num_params: int) -> List[Any]:
         """Parse parameters from COM_STMT_EXECUTE packet"""
         try:
+            # COM_STMT_EXECUTE packet structure:
+            # 1 byte: command (0x17)
+            # 4 bytes: statement_id
+            # 1 byte: flags
+            # 4 bytes: iteration_count
+            # If num_params > 0:
+            #   (num_params+7)/8 bytes: null_bitmap
+            #   1 byte: new_params_bound_flag
+            #   If new_params_bound_flag == 1:
+            #     num_params * 2 bytes: parameter types
+            #     variable: parameter values
             
             idx = 5  # After command and stmt_id
             
@@ -877,6 +978,7 @@ class VDSInstance:
             if num_params == 0:
                 return []
             
+            # Null bitmap
             null_bitmap_len = (num_params + 7) // 8
             if len(packet_body) < idx + null_bitmap_len:
                 logger.warning("Packet too short for null bitmap")
@@ -885,6 +987,7 @@ class VDSInstance:
             null_bitmap = packet_body[idx:idx + null_bitmap_len]
             idx += null_bitmap_len
             
+            # Check if new params are bound
             if len(packet_body) < idx + 1:
                 logger.warning("Packet too short for new_params_bound_flag")
                 return [None] * num_params
@@ -896,6 +999,7 @@ class VDSInstance:
             param_types = []
             
             if new_params_bound == 1:
+                # Read parameter types
                 if len(packet_body) < idx + (num_params * 2):
                     logger.warning("Packet too short for parameter types")
                     return [None] * num_params
@@ -906,7 +1010,9 @@ class VDSInstance:
                     param_types.append((field_type, unsigned))
                     idx += 2
                 
+                # Read parameter values
                 for i in range(num_params):
+                    # Check null bitmap
                     is_null = (null_bitmap[i // 8] & (1 << (i % 8))) != 0
                     
                     if is_null:
@@ -917,6 +1023,7 @@ class VDSInstance:
                         params.append(value)
                         idx += bytes_read
             else:
+                # Use previous parameter types (not implemented - use None)
                 params = [None] * num_params
             
             return params
@@ -930,6 +1037,7 @@ class VDSInstance:
     def _read_param_value(self, data: bytes, offset: int, field_type: int, unsigned: int) -> Tuple[Any, int]:
         """Read a single parameter value from the packet"""
         try:
+            # MySQL field types
             MYSQL_TYPE_TINY = 1
             MYSQL_TYPE_SHORT = 2
             MYSQL_TYPE_LONG = 3
@@ -953,6 +1061,7 @@ class VDSInstance:
             elif field_type == MYSQL_TYPE_DOUBLE:
                 return struct.unpack('<d', data[offset:offset+8])[0], 8
             elif field_type in (MYSQL_TYPE_STRING, MYSQL_TYPE_VAR_STRING, MYSQL_TYPE_BLOB):
+                # Length-encoded string
                 length, length_bytes = self._read_length_encoded_integer(data, offset)
                 if length is None:
                     return None, length_bytes
@@ -1003,20 +1112,25 @@ class VDSInstance:
     def _build_sql_from_template(self, template: str, params: List[Any]) -> str:
         """Build final SQL by replacing ? placeholders with actual parameter values"""
         try:
+            # Simple replacement - replace each ? with the corresponding parameter
             result = template
             for param in params:
                 if param is None:
                     value_str = 'NULL'
                 elif isinstance(param, str):
+                    # Escape single quotes and wrap in quotes
                     escaped = param.replace("'", "''")
                     value_str = f"'{escaped}'"
                 elif isinstance(param, (int, float)):
                     value_str = str(param)
                 elif isinstance(param, bytes):
+                    # Convert bytes to hex string
                     value_str = f"X'{param.hex()}'"
                 else:
+                    # Default: convert to string and quote
                     value_str = f"'{str(param)}'"
                 
+                # Replace first occurrence of ?
                 result = result.replace('?', value_str, 1)
             
             return result
@@ -1028,6 +1142,13 @@ class VDSInstance:
     def _build_stmt_prepare_ok(self, stmt_id: int, num_params: int, sequence_number: int) -> bytes:
         """Build COM_STMT_PREPARE_OK response packet"""
         try:
+            # Packet payload:
+            # 1 byte: OK (0x00)
+            # 4 bytes: statement_id
+            # 2 bytes: num_columns (0 for non-SELECT)
+            # 2 bytes: num_params
+            # 1 byte: reserved (0x00)
+            # 2 bytes: warning_count (0)
             
             payload = struct.pack('<BIHBH',
                 0x00,           # OK
@@ -1038,6 +1159,7 @@ class VDSInstance:
                 0               # warning_count
             )
             
+            # Build packet with header
             packet_length = len(payload)
             header = struct.pack('<I', packet_length)[:3] + struct.pack('<B', sequence_number)
             
@@ -1047,6 +1169,7 @@ class VDSInstance:
             logger.error(f"Error building STMT_PREPARE_OK: {e}")
             return self._build_mysql_error_packet(f"Internal error: {str(e)}", sequence_number)
 
+    # Protocol handling methods (copied from VirtualDatabaseServer)
     def _analyze_query_type(self, query: str) -> str:
         """Analyze the type of SQL query"""
         query_upper = query.strip().upper()
@@ -1082,6 +1205,7 @@ class VDSInstance:
         This consumes the packet sent by the client after our Greeting.
         """
         try:
+            # Read packet header (4 bytes)
             header = b""
             while len(header) < 4:
                 chunk = client_socket.recv(4 - len(header))
@@ -1091,11 +1215,14 @@ class VDSInstance:
                 header += chunk
 
             packet_length = struct.unpack('<I', header[:3] + b'\x00')[0]
+            # sequence_number = header[3]  # Should be 1
 
+            # Validate packet length
             if packet_length > 16 * 1024 * 1024:
                 logger.error(f"Handshake packet too large: {packet_length}")
                 return False
 
+            # Read packet data
             data = b""
             while len(data) < packet_length:
                 chunk = client_socket.recv(min(packet_length - len(data), 4096))
@@ -1103,7 +1230,10 @@ class VDSInstance:
                     return False
                 data += chunk
 
+            # Parse handshake response 4.1
             if len(data) > 32:
+                # Capability Flags (4) + Max Packet Size (4) + Charset (1) + Reserved (23) = 32 bytes
+                # Username follows, null terminated
                 username_end = data.find(b'\x00', 32)
                 if username_end != -1:
                     username = data[32:username_end].decode('utf-8', errors='ignore')
@@ -1120,6 +1250,7 @@ class VDSInstance:
     def _receive_mysql_query(self, client_socket: socket.socket) -> str:
         """Receive MySQL query from client with improved error handling"""
         try:
+            # Read packet header (4 bytes: 3 bytes length + 1 byte sequence)
             header = b""
             while len(header) < 4:
                 chunk = client_socket.recv(4 - len(header))
@@ -1135,10 +1266,12 @@ class VDSInstance:
             packet_length = struct.unpack('<I', header[:3] + b'\x00')[0]
             sequence_number = header[3]
 
+            # Validate packet length (prevent buffer overflow attacks)
             if packet_length > 16 * 1024 * 1024:  # 16MB max
                 logger.error(f"Packet too large: {packet_length} bytes")
                 return ""
 
+            # Read packet data
             data = b""
             while len(data) < packet_length:
                 remaining = packet_length - len(data)
@@ -1154,16 +1287,19 @@ class VDSInstance:
                     f"Packet size mismatch: expected {packet_length}, got {len(data)}")
                 return ""
 
+            # First byte is command type
             command_type = data[0]
             query_data = data[1:]
 
             if command_type == COM_QUERY:
+                # Regular query
                 try:
                     return query_data.decode('utf-8', errors='ignore')
                 except UnicodeDecodeError:
                     logger.warning("Failed to decode query as UTF-8")
                     return ""
             elif command_type == COM_QUIT:
+                # Client wants to quit
                 return "QUIT"
             else:
                 logger.debug(f"Unsupported MySQL command: {command_type}")
@@ -1187,6 +1323,7 @@ class VDSInstance:
                 packets = self._build_mysql_result_set_packets(result, 1)
                 return b"".join(packets)
             else:
+                # OK packet for non-SELECT queries
                 affected_rows = result.get("affected_rows", 0)
                 return self._build_mysql_ok_packet(sequence_number=1, affected_rows=affected_rows)
 
@@ -1201,6 +1338,7 @@ class VDSInstance:
 
         try:
             if not result.get("success", False):
+                # Return error packet
                 return [self._build_mysql_error_packet(sequence_number, result.get("error", "Query failed"))]
 
             if result.get("query_type") == "SELECT":
@@ -1209,36 +1347,44 @@ class VDSInstance:
                 column_types = result.get("column_types", {})
 
                 if not columns:
+                    # No columns - return OK packet
                     packets.append(
                         self._build_mysql_ok_packet(sequence_number))
                     return packets
 
+                # Column count packet
                 column_count_packet = self._build_mysql_column_count_packet(
                     len(columns), sequence_number)
                 packets.append(column_count_packet)
                 sequence_number = (sequence_number + 1) % 256
 
+                # Column definition packets
                 for col_name in columns:
+                    # Type 0xfd is MYSQL_TYPE_VAR_STRING
                     col_type = column_types.get(col_name, 0xfd)
                     col_def_packet = self._build_mysql_column_definition_packet(
                         col_name, sequence_number, col_type)
                     packets.append(col_def_packet)
                     sequence_number = (sequence_number + 1) % 256
 
+                # EOF packet after column definitions
                 eof_packet = self._build_mysql_eof_packet(sequence_number)
                 packets.append(eof_packet)
                 sequence_number = (sequence_number + 1) % 256
 
+                # Data row packets
                 for row in rows:
                     row_packet = self._build_mysql_data_row_packet(
                         row, columns, sequence_number)
                     packets.append(row_packet)
                     sequence_number = (sequence_number + 1) % 256
 
+                # Final EOF packet
                 eof_packet = self._build_mysql_eof_packet(sequence_number)
                 packets.append(eof_packet)
 
             else:
+                # Non-SELECT query - return OK
                 packets.append(self._build_mysql_ok_packet(sequence_number))
 
         except Exception as e:
@@ -1250,14 +1396,20 @@ class VDSInstance:
     def _build_mysql_column_definition_packet(self, column_name: str, sequence_number: int) -> bytes:
         """Build MySQL column definition packet with simplified format"""
         try:
+            # Use a very basic format that should work with most MySQL clients
+            # This is a minimal implementation that avoids complex length encoding
 
+            # Catalog "def" (3 bytes + null terminator = 4 bytes, but we'll use simple format)
             catalog = b"def\x00"
 
+            # Empty strings for schema, table, org_table, org_name (1 byte each for length 0)
             empty_str = b"\x00"
 
+            # Column name with length prefix
             name_bytes = column_name.encode('utf-8')
             name_with_len = bytes([len(name_bytes)]) + name_bytes
 
+            # Fixed fields: charset(2), length(4), type(1), flags(2), decimals(1), filler(2)
             fixed_fields = (
                 struct.pack('<H', 33) +      # charset utf8_general_ci
                 struct.pack('<I', 255) +     # max length
@@ -1267,6 +1419,7 @@ class VDSInstance:
                 b'\x00\x00'                   # filler
             )
 
+            # Build the packet content
             packet = (
                 catalog +           # 4 bytes
                 empty_str +         # 1 byte (schema)
@@ -1278,6 +1431,7 @@ class VDSInstance:
                 fixed_fields        # 12 bytes
             )
 
+            # Add packet header
             packet_length = len(packet)
             header = struct.pack('<I', packet_length)[
                 :3] + bytes([sequence_number])
@@ -1315,14 +1469,19 @@ class VDSInstance:
         try:
             packet = b""
 
+            # OK packet header (0x00)
             packet += bytes([OK_PACKET])
 
+            # Affected rows (length-encoded integer)
             packet += self._encode_length_encoded_int(affected_rows)
 
+            # Last insert ID (length-encoded integer)
             packet += self._encode_length_encoded_int(0)
 
+            # Status flags (2 bytes)
             packet += struct.pack('<H', MYSQL_DEFAULT_STATUS)
 
+            # Warnings (2 bytes)
             packet += struct.pack('<H', 0)
 
             packet_length = len(packet)
@@ -1352,13 +1511,17 @@ class VDSInstance:
         This ensures VDS always returns plaintext data regardless of console service processing.
         """
         try:
+            # Skip tag columns
             if col_name.startswith('tag_'):
                 return ""
 
+            # If value is None, return empty string
             if value is None:
                 return ""
 
+            # If value is already a string, check if it's actually encrypted hex data
             if isinstance(value, str):
+                # Check if it's a hex string that represents encrypted data
                 if len(value) > 100 and len(value) % 2 == 0 and all(c in '0123456789abcdefABCDEF' for c in value):
                     try:
                         hex_bytes = bytes.fromhex(value)
@@ -1371,8 +1534,10 @@ class VDSInstance:
                     except Exception as e:
                         logger.debug(
                             f"VDS DECRYPT: Hex string in {col_name} not encrypted")
+                # Otherwise, it's already decrypted
                 return value
 
+            # If value is bytes, it needs decryption
             if isinstance(value, bytes):
                 try:
                     logger.info(
@@ -1385,8 +1550,10 @@ class VDSInstance:
                 except Exception as e:
                     logger.error(
                         f"VDS DECRYPT: Failed to decrypt bytes in {col_name}: {e}")
+                    # If decryption fails, it might not be encrypted - return as hex
                     return value.hex()
 
+            # For any other type, convert to string
             return str(value)
 
         except Exception as e:
@@ -1402,16 +1569,23 @@ class VDSInstance:
             for col_name in columns:
                 value = row.get(col_name, None)
 
+                # Handle NULL values
                 if value is None:
+                    # NULL is represented as 0xFB (251) in MySQL protocol
                     packet += b'\xfb'
                 else:
+                    # Use the same decryption logic as console service for consistency
                     str_value = self._decrypt_value_for_vds(col_name, value)
 
+                    # Encode as UTF-8
                     encoded_value = str_value.encode('utf-8')
 
+                    # Length-encoded: 1 byte length + data (for lengths < 251)
                     if len(encoded_value) < 251:
                         packet += bytes([len(encoded_value)]) + encoded_value
                     else:
+                        # For longer strings, we'd need proper length encoding
+                        # For now, truncate to avoid complexity
                         truncated = encoded_value[:250]
                         packet += bytes([len(truncated)]) + truncated
 
@@ -1432,44 +1606,62 @@ class VDSInstance:
     def _build_mysql_greeting_packet(self) -> bytes:
         """Build MySQL greeting (handshake) packet"""
         try:
+            # Generate random connection ID
             connection_id = random.randint(1, 2**32 - 1)
 
+            # Generate random auth plugin data (20 bytes total, split into two parts)
             auth_plugin_data = b''.join(
                 [bytes([random.randint(0, 255)]) for _ in range(20)])
             auth_plugin_data_part1 = auth_plugin_data[:8]
             auth_plugin_data_part2 = auth_plugin_data[8:]
 
+            # Auth plugin name
             auth_plugin_name = b"mysql_native_password\x00"
 
+            # Build the packet
             packet = b""
 
+            # Protocol version (1 byte)
             packet += bytes([MYSQL_PROTOCOL_VERSION])
 
+            # Server version (null-terminated string)
             packet += MYSQL_SERVER_VERSION.encode() + b'\x00'
 
+            # Connection ID (4 bytes, little endian)
             packet += struct.pack('<I', connection_id)
 
+            # Auth plugin data part 1 (8 bytes)
             packet += auth_plugin_data_part1
 
+            # Filler (1 byte, always 0x00)
             packet += b'\x00'
 
+            # Capability flags lower 2 bytes
             packet += struct.pack('<H', MYSQL_DEFAULT_CAPABILITIES & 0xFFFF)
 
+            # Character set (1 byte)
             packet += bytes([MYSQL_DEFAULT_CHARSET])
 
+            # Status flags (2 bytes)
             packet += struct.pack('<H', MYSQL_DEFAULT_STATUS)
 
+            # Capability flags upper 2 bytes
             packet += struct.pack('<H',
                                   (MYSQL_DEFAULT_CAPABILITIES >> 16) & 0xFFFF)
 
+            # Auth plugin data length (1 byte) - includes trailing null
             packet += bytes([len(auth_plugin_data_part2) + 1])
 
+            # Reserved (10 bytes, all 0x00)
             packet += b'\x00' * 10
 
+            # Auth plugin data part 2 (null-terminated)
             packet += auth_plugin_data_part2 + b'\x00'
 
+            # Auth plugin name (null-terminated)
             packet += auth_plugin_name
 
+            # Add packet length and sequence number (3 bytes length + 1 byte seq)
             packet_length = len(packet)
             sequence_number = 0
             header = struct.pack('<I', packet_length)[
@@ -1494,6 +1686,7 @@ class VDSInstance:
                 if not rows:
                     return "Empty result set"
 
+                # Format as simple text table
                 output = []
                 output.append("| " + " | ".join(columns) + " |")
                 output.append("|" + "|".join("-" * (len(col) + 2)
@@ -1651,6 +1844,7 @@ class VDSInstance:
     def _build_mysql_column_definition_packet(self, column_name: str, sequence_number: int, column_type: int = 0xfd) -> bytes:
         """Build MySQL column definition packet with proper protocol structure"""
         try:
+            # Helper function to encode length-encoded string
             def encode_lenenc_string(s: str) -> bytes:
                 if not s:
                     return b'\x00'
@@ -1666,35 +1860,50 @@ class VDSInstance:
             
             packet = b""
             
+            # Catalog (always "def")
             packet += encode_lenenc_string("def")
             
+            # Schema (empty for now)
             packet += encode_lenenc_string("")
             
+            # Table (virtual table name)
             packet += encode_lenenc_string("")
             
+            # Original table (empty)
             packet += encode_lenenc_string("")
             
+            # Column name
             packet += encode_lenenc_string(column_name)
             
+            # Original column name (same as column name)
             packet += encode_lenenc_string(column_name)
             
+            # Fixed length fields marker (0x0c = 12 bytes follow)
             packet += b'\x0c'
             
+            # Character set (utf8_general_ci = 33)
+            # Use binary collation (63) for non-string types or 33 for strings
             packet += struct.pack('<H', 33)
             
+            # Column length (max length for VARCHAR)
             packet += struct.pack('<I', 255)
             
+            # Column type (Use provided type, default to MYSQL_TYPE_VAR_STRING = 0xfd)
             if isinstance(column_type, int) and 0 <= column_type <= 255:
                 packet += bytes([column_type])
             else:
                 packet += b'\xfd'
             
+            # Flags (0 = no special flags)
             packet += struct.pack('<H', 0)
             
+            # Decimals (0 for string types)
             packet += b'\x00'
             
+            # Filler (2 bytes of 0x00)
             packet += b'\x00\x00'
             
+            # Add packet header (length + sequence number)
             packet_length = len(packet)
             header = struct.pack('<I', packet_length)[:3] + bytes([sequence_number])
             
@@ -1730,6 +1939,7 @@ class VDSInstance:
             return b""
 
     def _build_mysql_eof_packet(self, sequence_number: int) -> bytes:
+        # EOF packet structure: 0xFE + warnings (2 bytes) + status flags (2 bytes)
         eof = bytes([EOF_PACKET])
         eof += struct.pack('<H', 0)  # warnings count (2 bytes)
         eof += struct.pack('<H', MYSQL_DEFAULT_STATUS)  # status flags (2 bytes)
@@ -1772,11 +1982,13 @@ class VirtualDatabaseServer:
         non_encrypted_columns = []
 
         for col_name, col_config in config.items():
+            # Check if column should be encrypted based on configuration
             should_encrypt = col_config.get('type') == 'encrypt'
             logger.info(
                 f"Column {col_name}: type={col_config.get('type')}, should_encrypt={should_encrypt}")
 
             if should_encrypt:
+                # Create mapping for encrypted columns
                 encrypted_columns[col_name] = ColumnMapping(
                     original_name=col_name,
                     encrypted_name=col_name,  # Use the column name as-is from config
@@ -1792,10 +2004,12 @@ class VirtualDatabaseServer:
                 non_encrypted_columns.append(col_name)
                 logger.info(f"Added {col_name} to non-encrypted columns")
 
+        # Set primary key based on table name or config
         primary_key = None
         if 'primary_keys' in config and config['primary_keys']:
             primary_key = config['primary_keys'][0]  # Take first primary key
         else:
+            # Default primary keys for common tables
             primary_keys = {
                 'users': 'id',
                 'customers': 'id',
@@ -1818,7 +2032,11 @@ class VirtualDatabaseServer:
     def _setup_schema_mappings(self):
         """Setup schema mappings for translating normal column names to encrypted equivalents"""
         try:
+            # Use the console service's migration state loading and table mapping registration
+            # This ensures VDS uses the same logic as the query console
 
+            # Load migration state using the same method as console service
+            # If migration_state was provided in init, use it, otherwise load it
             if not hasattr(self, 'migration_state') or not self.migration_state:
                 self.migration_state = self.console_service._load_migration_state_from_files(
                     self.encrypted_db_url)
@@ -1830,14 +2048,17 @@ class VirtualDatabaseServer:
                     f"Migration state keys: {list(self.migration_state.keys())}")
                 if self.migration_state.get("encrypted_db_url"):
                     self.encrypted_db_url = self.migration_state["encrypted_db_url"]
+                    # Ensure MySQL URLs use PyMySQL driver
                     if self.encrypted_db_url.startswith('mysql://'):
                         self.encrypted_db_url = self.encrypted_db_url.replace(
                             'mysql://', 'mysql+pymysql://', 1)
                     logger.info(
                         f"Using encrypted DB URL from migration state: {self.encrypted_db_url}")
 
+            # Register table mappings using the same method as console service
             self.console_service._register_table_mappings()
 
+            # Now get the registered mappings from the AI assistant (which console service just updated)
             self.table_mappings = self.ai_assistant.table_mappings.copy()
             self.database_schemas = self.ai_assistant.database_schemas.copy()
 
@@ -1846,20 +2067,24 @@ class VirtualDatabaseServer:
             logger.info(
                 f"VDS using {len(self.database_schemas)} database schemas from AI assistant")
 
+            # Set database type for translators
             enhanced_sql_translator.set_database_type(self.encrypted_db_url)
             sql_interceptor.set_database_type(self.encrypted_db_url)
 
+            # Verify registration worked
             logger.info(
                 f"VDS - Translator has {len(enhanced_sql_translator.table_mappings)} mappings: {list(enhanced_sql_translator.table_mappings.keys())}")
             logger.info(
                 f"VDS - Interceptor has {len(sql_interceptor.table_mappings)} mappings: {list(sql_interceptor.table_mappings.keys())}")
 
+            # Debug: Log detailed mapping info
             for table_name, mapping in self.table_mappings.items():
                 logger.info(
                     f"VDS Table {table_name} mapping: encrypted_cols={list(mapping.encrypted_columns.keys())}, non_encrypted={mapping.non_encrypted_columns}")
 
         except Exception as e:
             logger.error(f"Failed to setup schema mappings in VDS: {e}")
+            # Fallback to basic setup if console service loading fails
             try:
                 import_result = self.ai_assistant.import_schemas_mapping()
                 self.table_mappings = self.ai_assistant.table_mappings.copy()
@@ -1876,6 +2101,7 @@ class VirtualDatabaseServer:
             from pathlib import Path
             import json
 
+            # Get the directory where this script is located
             script_dir = Path(__file__).parent.parent  # Go up to project root
             schemas_dir = script_dir / "schemas"
             logger.info(f"Looking for schemas in: {schemas_dir}")
@@ -1884,6 +2110,7 @@ class VirtualDatabaseServer:
                     f"No schemas directory found at {schemas_dir}. Migration may not be completed yet.")
                 return {}
 
+            # Find migration state files
             state_files = list(schemas_dir.glob("*_migration_state.json"))
             logger.info(
                 f"Found migration state files: {[str(f) for f in state_files]}")
@@ -1892,11 +2119,13 @@ class VirtualDatabaseServer:
                     "No migration state files found. Migration may not be completed yet.")
                 return {}
 
+            # Load migration state files and find the most recent one with table configs
             valid_states = []
             for state_file in state_files:
                 try:
                     with open(state_file, 'r') as f:
                         state_data = json.load(f)
+                        # Accept migration states that have table configs, even if not complete
                         if state_data.get('table_configs'):
                             valid_states.append((state_file, state_data))
                 except Exception as e:
@@ -1908,6 +2137,7 @@ class VirtualDatabaseServer:
                     "No migration state files with table configs found.")
                 return {}
 
+            # Find the most recent migration state with table configs
             latest_state_file, migration_state = max(
                 valid_states, key=lambda x: x[0].stat().st_mtime)
 
@@ -1928,6 +2158,7 @@ class VirtualDatabaseServer:
     def _setup_encryption_engine(self):
         """Setup encryption engine for transparent data handling"""
         try:
+            # Verify CLWE encryption is working
             test_data = "test_encryption"
             encrypted = clwe_encryptor.encrypt_value(
                 test_data, settings.CRYPTOPIX_DEFAULT_PASSWORD)
@@ -1954,6 +2185,7 @@ class VirtualDatabaseServer:
                 socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.server_socket.bind((self.host, self.port))
             self.server_socket.listen(self.max_connections)
+            # Non-blocking accept to allow immediate shutdown
             self.server_socket.settimeout(0.1)
             self.running = True
 
@@ -1962,6 +2194,7 @@ class VirtualDatabaseServer:
             logger.info(
                 f"Accepting {self.target_protocol} connections with transparent encryption")
 
+            # Start accepting connections in a separate thread
             self.accept_thread = threading.Thread(
                 target=self._accept_connections, daemon=True)
             self.accept_thread.start()
@@ -1976,10 +2209,13 @@ class VirtualDatabaseServer:
         try:
             self.running = False
 
+            # Join the accept thread to ensure it terminates
             if hasattr(self, 'accept_thread') and self.accept_thread.is_alive():
                 self.accept_thread.join(timeout=1.0)
 
+            # Close all active connections
             with self.connection_lock:
+                # Create a copy of items to avoid runtime error during iteration
                 active_conns = list(self.active_connections.items())
                 for conn_id, conn_info in active_conns:
                     try:
@@ -1992,6 +2228,7 @@ class VirtualDatabaseServer:
                             f"Error closing connection {conn_id}: {e}")
                 self.active_connections.clear()
 
+            # Close server socket
             if self.server_socket:
                 try:
                     self.server_socket.shutdown(socket.SHUT_RDWR)
@@ -2000,6 +2237,7 @@ class VirtualDatabaseServer:
                     logger.warning(f"Error closing server socket: {e}")
                 self.server_socket = None
 
+            # Shutdown executor
             self.executor.shutdown(wait=False)
             logger.info("Virtual Database Server stopped")
 
@@ -2012,6 +2250,7 @@ class VirtualDatabaseServer:
             try:
                 client_socket, client_address = self.server_socket.accept()
 
+                # Check connection limit
                 with self.connection_lock:
                     if len(self.active_connections) >= self.max_connections:
                         logger.warning(
@@ -2032,12 +2271,15 @@ class VirtualDatabaseServer:
                 logger.info(
                     f"New connection {connection_id} from {client_address}")
 
+                # Handle connection in separate thread
                 self.executor.submit(
                     self._handle_connection, connection_id, client_socket, client_address)
 
             except socket.timeout:
+                # Timeout occurred, check if we should still be running
                 continue
             except OSError:
+                # Socket was closed
                 break
             except Exception as e:
                 if not self.running:
@@ -2047,18 +2289,23 @@ class VirtualDatabaseServer:
     def _handle_connection(self, connection_id: int, client_socket: socket.socket, client_address: tuple):
         """Handle individual client connection with session isolation"""
         try:
+            # Send greeting based on protocol
             if self.target_protocol == "mysql":
+                # 1. Send Server Greeting (Handshake V10)
                 greeting = self._build_mysql_greeting_packet()
                 client_socket.sendall(greeting)
 
+                # 2. Receive Client Authentication Packet (Handshake Response)
                 if not self._receive_handshake_response(client_socket, connection_id):
                     logger.warning(f"Connection {connection_id} handshake failed")
                     return
 
+                # 3. Send OK Packet to complete authentication
                 ok_packet = self._build_mysql_ok_packet(sequence_number=2)
                 client_socket.sendall(ok_packet)
                 
             else:
+                # For other protocols, send simple acknowledgment
                 greeting = b"VDS Ready\n"
                 client_socket.sendall(greeting)
         except Exception as e:
@@ -2066,11 +2313,14 @@ class VirtualDatabaseServer:
                 f"Error sending greeting to connection {connection_id}: {e}")
             return
 
+            # Connection loop
             while self.running:
                 try:
+                    # Receive query/command
                     if self.target_protocol == "mysql":
                         query = self._receive_mysql_query(client_socket)
                     else:
+                        # Simple text-based protocol for other databases
                         data = client_socket.recv(4096)
                         if not data:
                             break
@@ -2084,6 +2334,7 @@ class VirtualDatabaseServer:
                             break
                         continue
 
+                    # Update last activity
                     with self.connection_lock:
                         if connection_id in self.active_connections:
                             self.active_connections[connection_id]['last_activity'] = time.time(
@@ -2092,8 +2343,10 @@ class VirtualDatabaseServer:
                     logger.debug(
                         f"Connection {connection_id}: Processing query: {query[:100]}...")
 
+                    # Process query through VDS pipeline
                     result = self._process_query(query, connection_id)
 
+                    # Send response back to client
                     try:
                         if self.target_protocol == "mysql":
                             response = self._build_mysql_response(result)
@@ -2112,6 +2365,7 @@ class VirtualDatabaseServer:
                 except Exception as e:
                     logger.error(
                         f"Error handling query for connection {connection_id}: {e}")
+                    # Send error response
                     if self.target_protocol == "mysql":
                         error_response = self._build_mysql_error_packet(str(e))
                         client_socket.sendall(error_response)
@@ -2123,6 +2377,7 @@ class VirtualDatabaseServer:
         except Exception as e:
             logger.error(f"Error in connection handler {connection_id}: {e}")
         finally:
+            # Clean up connection
             client_socket.close()
             with self.connection_lock:
                 if connection_id in self.active_connections:
@@ -2135,6 +2390,8 @@ class VirtualDatabaseServer:
         The console service already handles all decryption, so VDS just passes through the results.
         """
         try:
+            # Use the console service's execute_command method for consistent processing
+            # The console service already handles all decryption for SELECT queries
             result = self.console_service.execute_command(
                 command=query,
                 user_id=f"vds_client_{connection_id}",
@@ -2142,6 +2399,7 @@ class VirtualDatabaseServer:
                 migration_state=self.migration_state
             )
 
+            # Add VDS-specific metadata
             result["processed_by"] = "VDS"
             result["connection_id"] = connection_id
 
@@ -2195,10 +2453,14 @@ class VirtualDatabaseServer:
             logger.info(
                 f"VDS processing SELECT query using console service: {query[:100]}...")
 
+            # Use the console service for consistent query processing
+            # This ensures complex queries with JOINs, aliases, and schema mapping work properly
             from app.services.console_service import console_service
 
+            # Load migration state for the console service
             migration_state = self.migration_state or self._load_migration_state()
 
+            # Execute the query using console service (same as query console)
             result = console_service.execute_command(
                 query,
                 user_id=f"virtual_client_{connection_id}",
@@ -2206,6 +2468,7 @@ class VirtualDatabaseServer:
                 migration_state=migration_state
             )
 
+            # Ensure the result has the correct query type
             if result.get("success") and result.get("query_type") in ["SELECT", "SQL"]:
                 result["query_type"] = "SELECT"
 
@@ -2230,6 +2493,7 @@ class VirtualDatabaseServer:
         data is ever stored.
         """
         try:
+            # Extract table name to check mapping
             table_name = self._extract_table_name(query)
             if not table_name:
                 return {
@@ -2238,6 +2502,7 @@ class VirtualDatabaseServer:
                     "query_type": query.split()[0].upper()
                 }
 
+            # Check if table is configured for encryption
             if table_name not in self.table_mappings:
                 logger.warning(
                     f"Attempted write operation on unmapped table '{table_name}' - rejecting to ensure encryption")
@@ -2250,6 +2515,7 @@ class VirtualDatabaseServer:
             logger.info(
                 f"VDS encrypting data for write query on table '{table_name}'")
 
+            # Use console service for consistent synchronous processing
             result = self.console_service.execute_command(
                 command=query,
                 user_id=f"virtual_client_{connection_id}",
@@ -2284,12 +2550,14 @@ class VirtualDatabaseServer:
 
     def _column_needs_decryption(self, column_name: str, original_query: str) -> bool:
         """Determine if a column needs decryption based on schema mappings"""
+        # Extract table name from query (simplified)
         table_match = re.search(r'FROM\s+(\w+)', original_query, re.IGNORECASE)
         if table_match:
             table_name = table_match.group(1)
             table_mapping = self.table_mappings.get(table_name)
 
             if table_mapping and hasattr(table_mapping, 'encrypted_columns'):
+                # Check if column is in encrypted columns
                 column_mapping = table_mapping.encrypted_columns.get(
                     column_name)
                 if column_mapping and hasattr(column_mapping, 'is_encrypted'):
@@ -2302,8 +2570,10 @@ class VirtualDatabaseServer:
         try:
             logger.info(f"VDS executing DDL query: {query[:100]}...")
 
+            # Execute DDL directly on encrypted database
             result = self._execute_direct_query(query, "system")
 
+            # Override query_type for DDL
             result["query_type"] = "DDL"
 
             logger.info(
@@ -2326,6 +2596,7 @@ class VirtualDatabaseServer:
             logger.info(f"VDS handling transaction query: {query}")
 
             if query_upper.startswith("BEGIN") or query_upper.startswith("START"):
+                # For VDS, transactions are handled at the connection level
                 return {
                     "success": True,
                     "query_type": "TRANSACTION",
@@ -2374,6 +2645,7 @@ class VirtualDatabaseServer:
             query_upper = query.strip().upper()
             logger.info(f"VDS handling privilege query: {query}")
 
+            # In VDS context, privilege commands are informational
             if query_upper.startswith("GRANT"):
                 return {
                     "success": True,
@@ -2409,6 +2681,7 @@ class VirtualDatabaseServer:
             query_upper = query.strip().upper()
             logger.info(f"VDS handling lock query: {query}")
 
+            # VDS handles locking at the virtual level
             if query_upper.startswith("LOCK"):
                 return {
                     "success": True,
@@ -2445,6 +2718,7 @@ class VirtualDatabaseServer:
             logger.info(f"VDS handling explain query: {query}")
 
             if query_upper.startswith("EXPLAIN"):
+                # Extract the query to explain
                 explain_match = re.search(
                     r'EXPLAIN\s+(.+)', query, re.IGNORECASE | re.DOTALL)
                 if explain_match:
@@ -2464,6 +2738,7 @@ class VirtualDatabaseServer:
                     }
 
             elif query_upper.startswith(("DESCRIBE", "DESC")):
+                # Extract table name
                 desc_match = re.search(
                     r'DESCRIBE\s+(\w+)', query, re.IGNORECASE)
                 if desc_match:
@@ -2497,6 +2772,7 @@ class VirtualDatabaseServer:
             logger.info(f"VDS handling system query: {query}")
 
             if query_upper.startswith("SET"):
+                # Handle SET commands (variables, etc.)
                 return {
                     "success": True,
                     "query_type": "SYSTEM",
@@ -2504,6 +2780,7 @@ class VirtualDatabaseServer:
                     "note": "VDS maintains virtual session state"
                 }
             elif query_upper.startswith("SHOW"):
+                # Handle various SHOW commands
                 return self._handle_show_command(query, connection_id)
             else:
                 return {
@@ -2526,6 +2803,7 @@ class VirtualDatabaseServer:
             query_upper = query.strip().upper()
             logger.info(f"VDS handling index query: {query}")
 
+            # Execute index operations directly on encrypted database
             result = self._execute_direct_query(query, "system")
             result["query_type"] = "INDEX"
 
@@ -2545,6 +2823,7 @@ class VirtualDatabaseServer:
     def _execute_passthrough_query(self, query: str, connection_id: int) -> Dict[str, Any]:
         """Execute queries using the console service for consistency"""
         try:
+            # Handle USE commands specially - ignore them since VDS always uses encrypted DB
             query_upper = query.strip().upper()
             if query_upper.startswith("USE "):
                 logger.info(f"Ignoring USE command in VDS: {query}")
@@ -2557,6 +2836,7 @@ class VirtualDatabaseServer:
             logger.info(
                 f"VDS processing passthrough query using console service: {query[:50]}...")
 
+            # Use console service for consistent synchronous processing
             result = self.console_service.execute_command(
                 command=query,
                 user_id=f"virtual_client_{connection_id}",
@@ -2575,6 +2855,7 @@ class VirtualDatabaseServer:
             logger.info(
                 f"Query execution result: success={result.get('success')}, type={result.get('query_type')}")
 
+            # Return the results
             return {
                 "success": True,
                 "query_type": result.get("query_type", "OTHER"),
@@ -2598,6 +2879,7 @@ class VirtualDatabaseServer:
         This consumes the packet sent by the client after our Greeting.
         """
         try:
+            # Read packet header (4 bytes)
             header = b""
             while len(header) < 4:
                 chunk = client_socket.recv(4 - len(header))
@@ -2607,11 +2889,14 @@ class VirtualDatabaseServer:
                 header += chunk
 
             packet_length = struct.unpack('<I', header[:3] + b'\x00')[0]
+            # sequence_number = header[3]  # Should be 1
 
+            # Validate packet length
             if packet_length > 16 * 1024 * 1024:
                 logger.error(f"Handshake packet too large: {packet_length}")
                 return False
 
+            # Read packet data
             data = b""
             while len(data) < packet_length:
                 chunk = client_socket.recv(min(packet_length - len(data), 4096))
@@ -2619,7 +2904,10 @@ class VirtualDatabaseServer:
                     return False
                 data += chunk
 
+            # Parse handshake response 4.1
             if len(data) > 32:
+                # Capability Flags (4) + Max Packet Size (4) + Charset (1) + Reserved (23) = 32 bytes
+                # Username follows, null terminated
                 username_end = data.find(b'\x00', 32)
                 if username_end != -1:
                     username = data[32:username_end].decode('utf-8', errors='ignore')
@@ -2636,6 +2924,7 @@ class VirtualDatabaseServer:
     def _receive_mysql_query(self, client_socket: socket.socket) -> str:
         """Receive MySQL query from client with improved error handling"""
         try:
+            # Read packet header (4 bytes: 3 bytes length + 1 byte sequence)
             header = b""
             while len(header) < 4:
                 chunk = client_socket.recv(4 - len(header))
@@ -2651,10 +2940,12 @@ class VirtualDatabaseServer:
             packet_length = struct.unpack('<I', header[:3] + b'\x00')[0]
             sequence_number = header[3]
 
+            # Validate packet length (prevent buffer overflow attacks)
             if packet_length > 16 * 1024 * 1024:  # 16MB max
                 logger.error(f"Packet too large: {packet_length} bytes")
                 return ""
 
+            # Read packet data
             data = b""
             while len(data) < packet_length:
                 remaining = packet_length - len(data)
@@ -2670,16 +2961,19 @@ class VirtualDatabaseServer:
                     f"Packet size mismatch: expected {packet_length}, got {len(data)}")
                 return ""
 
+            # First byte is command type
             command_type = data[0]
             query_data = data[1:]
 
             if command_type == COM_QUERY:
+                # Regular query
                 try:
                     return query_data.decode('utf-8', errors='ignore')
                 except UnicodeDecodeError:
                     logger.warning("Failed to decode query as UTF-8")
                     return ""
             elif command_type == COM_QUIT:
+                # Client wants to quit
                 return "QUIT"
             else:
                 logger.debug(f"Unsupported MySQL command: {command_type}")
@@ -2705,6 +2999,7 @@ class VirtualDatabaseServer:
                 packets = self._build_mysql_result_set_packets(result, 1)
                 return b"".join(packets)
             else:
+                # OK packet for non-SELECT queries
                 affected_rows = result.get("affected_rows", 0)
                 return self._build_mysql_ok_packet(sequence_number=1, affected_rows=affected_rows)
 
@@ -2719,6 +3014,7 @@ class VirtualDatabaseServer:
 
         try:
             if not result.get("success", False):
+                # Return error packet
                 return [self._build_mysql_error_packet(sequence_number, result.get("error", "Query failed"))]
 
             if result.get("query_type") == "SELECT":
@@ -2726,35 +3022,42 @@ class VirtualDatabaseServer:
                 columns = result.get("columns", [])
 
                 if not columns:
+                    # No columns - return OK packet
                     packets.append(
                         self._build_mysql_ok_packet(sequence_number))
                     return packets
 
+                # Column count packet
                 column_count_packet = self._build_mysql_column_count_packet(
                     len(columns), sequence_number)
                 packets.append(column_count_packet)
                 sequence_number = (sequence_number + 1) % 256
 
+                # Column definition packets
                 for col_name in columns:
                     col_def_packet = self._build_mysql_column_definition_packet(
                         col_name, sequence_number)
                     packets.append(col_def_packet)
                     sequence_number = (sequence_number + 1) % 256
 
+                # EOF packet after column definitions
                 eof_packet = self._build_mysql_eof_packet(sequence_number)
                 packets.append(eof_packet)
                 sequence_number = (sequence_number + 1) % 256
 
+                # Data row packets
                 for row in rows:
                     row_packet = self._build_mysql_data_row_packet(
                         row, columns, sequence_number)
                     packets.append(row_packet)
                     sequence_number = (sequence_number + 1) % 256
 
+                # Final EOF packet
                 eof_packet = self._build_mysql_eof_packet(sequence_number)
                 packets.append(eof_packet)
 
             else:
+                # Non-SELECT query - return OK
                 packets.append(self._build_mysql_ok_packet(sequence_number))
 
         except Exception as e:
@@ -2766,14 +3069,20 @@ class VirtualDatabaseServer:
     def _build_mysql_column_definition_packet(self, column_name: str, sequence_number: int) -> bytes:
         """Build MySQL column definition packet with simplified format"""
         try:
+            # Use a very basic format that should work with most MySQL clients
+            # This is a minimal implementation that avoids complex length encoding
 
+            # Catalog "def" (3 bytes + null terminator = 4 bytes, but we'll use simple format)
             catalog = b"def\x00"
 
+            # Empty strings for schema, table, org_table, org_name (1 byte each for length 0)
             empty_str = b"\x00"
 
+            # Column name with length prefix
             name_bytes = column_name.encode('utf-8')
             name_with_len = bytes([len(name_bytes)]) + name_bytes
 
+            # Fixed fields: charset(2), length(4), type(1), flags(2), decimals(1), filler(2)
             fixed_fields = (
                 struct.pack('<H', 33) +      # charset utf8_general_ci
                 struct.pack('<I', 255) +     # max length
@@ -2783,6 +3092,7 @@ class VirtualDatabaseServer:
                 b'\x00\x00'                   # filler
             )
 
+            # Build the packet content
             packet = (
                 catalog +           # 4 bytes
                 empty_str +         # 1 byte (schema)
@@ -2794,6 +3104,7 @@ class VirtualDatabaseServer:
                 fixed_fields        # 12 bytes
             )
 
+            # Add packet header
             packet_length = len(packet)
             header = struct.pack('<I', packet_length)[
                 :3] + bytes([sequence_number])
@@ -2831,14 +3142,19 @@ class VirtualDatabaseServer:
         try:
             packet = b""
 
+            # OK packet header (0x00)
             packet += bytes([OK_PACKET])
 
+            # Affected rows (length-encoded integer)
             packet += self._encode_length_encoded_int(affected_rows)
 
+            # Last insert ID (length-encoded integer)
             packet += self._encode_length_encoded_int(0)
 
+            # Status flags (2 bytes)
             packet += struct.pack('<H', MYSQL_DEFAULT_STATUS)
 
+            # Warnings (2 bytes)
             packet += struct.pack('<H', 0)
 
             packet_length = len(packet)
@@ -2864,6 +3180,7 @@ class VirtualDatabaseServer:
                 if not rows:
                     return "Empty result set"
 
+                # Format as simple text table
                 output = []
                 output.append("| " + " | ".join(columns) + " |")
                 output.append("|" + "|".join("-" * (len(col) + 2)
@@ -2895,44 +3212,62 @@ class VirtualDatabaseServer:
     def _build_mysql_greeting_packet(self) -> bytes:
         """Build MySQL greeting (handshake) packet"""
         try:
+            # Generate random connection ID
             connection_id = random.randint(1, 2**32 - 1)
 
+            # Generate random auth plugin data (20 bytes total, split into two parts)
             auth_plugin_data = b''.join(
                 [bytes([random.randint(0, 255)]) for _ in range(20)])
             auth_plugin_data_part1 = auth_plugin_data[:8]
             auth_plugin_data_part2 = auth_plugin_data[8:]
 
+            # Auth plugin name
             auth_plugin_name = b"mysql_native_password\x00"
 
+            # Build the packet
             packet = b""
 
+            # Protocol version (1 byte)
             packet += bytes([MYSQL_PROTOCOL_VERSION])
 
+            # Server version (null-terminated string)
             packet += MYSQL_SERVER_VERSION.encode() + b'\x00'
 
+            # Connection ID (4 bytes, little endian)
             packet += struct.pack('<I', connection_id)
 
+            # Auth plugin data part 1 (8 bytes)
             packet += auth_plugin_data_part1
 
+            # Filler (1 byte, always 0x00)
             packet += b'\x00'
 
+            # Capability flags lower 2 bytes
             packet += struct.pack('<H', MYSQL_DEFAULT_CAPABILITIES & 0xFFFF)
 
+            # Character set (1 byte)
             packet += bytes([MYSQL_DEFAULT_CHARSET])
 
+            # Status flags (2 bytes)
             packet += struct.pack('<H', MYSQL_DEFAULT_STATUS)
 
+            # Capability flags upper 2 bytes
             packet += struct.pack('<H',
                                   (MYSQL_DEFAULT_CAPABILITIES >> 16) & 0xFFFF)
 
+            # Auth plugin data length (1 byte) - includes trailing null
             packet += bytes([len(auth_plugin_data_part2) + 1])
 
+            # Reserved (10 bytes, all 0x00)
             packet += b'\x00' * 10
 
+            # Auth plugin data part 2 (null-terminated)
             packet += auth_plugin_data_part2 + b'\x00'
 
+            # Auth plugin name (null-terminated)
             packet += auth_plugin_name
 
+            # Add packet length and sequence number (3 bytes length + 1 byte seq)
             packet_length = len(packet)
             sequence_number = 0
             header = struct.pack('<I', packet_length)[
@@ -2949,16 +3284,22 @@ class VirtualDatabaseServer:
         try:
             packet = b""
 
+            # OK packet header (0x00)
             packet += bytes([OK_PACKET])
 
+            # Affected rows (length-encoded integer)
             packet += self._encode_length_encoded_int(affected_rows)
 
+            # Last insert ID (length-encoded integer)
             packet += self._encode_length_encoded_int(last_insert_id)
 
+            # Status flags (2 bytes)
             packet += struct.pack('<H', MYSQL_DEFAULT_STATUS)
 
+            # Warnings (2 bytes)
             packet += struct.pack('<H', 0)
 
+            # Add packet length and sequence number
             packet_length = len(packet)
             header = struct.pack('<I', packet_length)[
                 :3] + bytes([sequence_number])
@@ -3003,6 +3344,7 @@ class VirtualDatabaseServer:
         logger.info("Stopping virtual database server...")
         self.running = False
 
+        # Close all active connections (create a copy to avoid modification during iteration)
         for conn_id, conn_info in list(self.active_connections.items()):
             try:
                 if 'socket' in conn_info:
@@ -3026,6 +3368,7 @@ class VirtualDatabaseServer:
         if not PYMYSQL_AVAILABLE:
             raise ImportError("pymysql is required for MySQL protocol support")
 
+        # Start MySQL wire protocol server
         self._start_mysql_wire_server()
 
     def _start_postgresql_server(self):
@@ -3055,6 +3398,7 @@ class VirtualDatabaseServer:
                     client_socket, client_address = self.server_socket.accept()
                     logger.info(f"New MySQL connection from {client_address}")
 
+                    # Handle connection in a separate thread
                     connection_id = self.connection_counter
                     self.connection_counter += 1
 
@@ -3096,6 +3440,7 @@ class VirtualDatabaseServer:
                     client_socket, client_address = self.server_socket.accept()
                     logger.info(f"New connection from {client_address}")
 
+                    # Handle connection in a separate thread
                     connection_id = self.connection_counter
                     self.connection_counter += 1
 
@@ -3122,6 +3467,7 @@ class VirtualDatabaseServer:
         try:
             logger.info(f"Handling MySQL connection {connection_id}")
 
+            # Send greeting packet
             greeting_packet = self._build_mysql_greeting_packet()
             if not greeting_packet:
                 logger.error("Failed to build greeting packet")
@@ -3136,8 +3482,10 @@ class VirtualDatabaseServer:
                     f"Error sending greeting packet to connection {connection_id}: {e}")
                 return
 
+            # Handle handshake response first
             sequence_number = 1  # Greeting was sequence 0
 
+            # Receive handshake response with improved error handling
             header = b""
             while len(header) < 4:
                 chunk = client_socket.recv(4 - len(header))
@@ -3157,6 +3505,7 @@ class VirtualDatabaseServer:
                 f"Received handshake response seq {packet_seq}, expected seq 1, length {packet_length}")
             logger.debug(f"Handshake header bytes: {header.hex()}")
 
+            # Validate packet length
             if packet_length > 1024 * 1024:  # 1MB max for handshake
                 logger.error(
                     f"Handshake packet too large: {packet_length} bytes")
@@ -3177,11 +3526,14 @@ class VirtualDatabaseServer:
                     f"Handshake packet size mismatch: expected {packet_length}, got {len(packet_body)}")
                 return
 
+            # Process handshake response
             if not self._process_mysql_handshake_response(packet_body, connection_id):
                 logger.error(
                     f"Handshake failed for connection {connection_id}")
                 return
 
+            # Send OK packet to acknowledge authentication
+            # Sequence number should be incremented from the received packet
             sequence_number = (packet_seq + 1) % 256
             ok_packet = self._build_mysql_ok_packet(sequence_number)
             try:
@@ -3193,14 +3545,17 @@ class VirtualDatabaseServer:
                 return
             sequence_number = (sequence_number + 1) % 256
 
+            # Mark as authenticated
             if connection_id in self.active_connections:
                 self.active_connections[connection_id]['authenticated'] = True
 
             logger.info(
                 f"Connection {connection_id} authenticated successfully")
 
+            # Now handle subsequent packets (queries)
             while self.running:
                 try:
+                    # Receive packet header with improved error handling
                     header = b""
                     while len(header) < 4:
                         chunk = client_socket.recv(4 - len(header))
@@ -3218,13 +3573,16 @@ class VirtualDatabaseServer:
                         '<I', header[:3] + b'\x00')[0]
                     packet_seq = header[3]
 
+                    # Validate packet length
                     if packet_length > 16 * 1024 * 1024:  # 16MB max
                         logger.error(
                             f"Query packet too large: {packet_length} bytes")
                         break
 
+                    # Update sequence number based on received packet
                     sequence_number = (packet_seq + 1) % 256
 
+                    # Receive packet body
                     packet_body = b""
                     while len(packet_body) < packet_length:
                         remaining = packet_length - len(packet_body)
@@ -3240,6 +3598,7 @@ class VirtualDatabaseServer:
                             f"Packet size mismatch: expected {packet_length}, got {len(packet_body)}")
                         break
 
+                    # Process packet based on first byte
                     if packet_body:
                         packet_type = packet_body[0]
 
@@ -3248,6 +3607,7 @@ class VirtualDatabaseServer:
                                 f"Client {connection_id} sent COM_QUIT")
                             break
                         elif packet_type == COM_QUERY:
+                            # Handle SQL query
                             query = packet_body[1:].decode(
                                 'utf-8', errors='ignore')
                             logger.info(
@@ -3268,6 +3628,7 @@ class VirtualDatabaseServer:
                                     break
                                 sequence_number = (sequence_number + 1) % 256
                         else:
+                            # Unknown or unhandled command - send OK for now
                             ok_packet = self._build_mysql_ok_packet(
                                 sequence_number)
                             try:
@@ -3285,6 +3646,7 @@ class VirtualDatabaseServer:
             logger.error(
                 f"Error handling MySQL connection {connection_id}: {e}")
         finally:
+            # Cleanup connection
             try:
                 client_socket.close()
             except:
@@ -3298,6 +3660,8 @@ class VirtualDatabaseServer:
     def _process_mysql_handshake_response(self, packet_body: bytes, connection_id: int) -> bool:
         """Process MySQL handshake response packet"""
         try:
+            # For now, accept any handshake response (dummy authentication)
+            # In a real implementation, you'd validate username/password
             logger.info(
                 f"Processing handshake response for connection {connection_id}")
             return True
@@ -3311,7 +3675,10 @@ class VirtualDatabaseServer:
         try:
             logger.info(f"Handling connection {connection_id}")
 
+            # For simplicity, we'll implement a basic text-based protocol
+            # In production, this would need to implement the full database wire protocol
 
+            # Send welcome message
             welcome_msg = f"Virtual CryptoPIX Database Server ({self.target_protocol.upper()}) ready.\n"
             try:
                 client_socket.send(welcome_msg.encode())
@@ -3324,12 +3691,14 @@ class VirtualDatabaseServer:
 
             while self.running:
                 try:
+                    # Receive data
                     data = client_socket.recv(4096)
                     if not data:
                         break  # Connection closed
 
                     buffer += data.decode('utf-8', errors='ignore')
 
+                    # Process complete commands (commands ending with semicolon)
                     while ';' in buffer:
                         command_end = buffer.find(';')
                         command = buffer[:command_end].strip()
@@ -3341,6 +3710,7 @@ class VirtualDatabaseServer:
                             break
 
                         if command:
+                            # Process SQL command
                             response = self._process_sql_command(
                                 command, connection_id)
                             try:
@@ -3356,6 +3726,7 @@ class VirtualDatabaseServer:
         except Exception as e:
             logger.error(f"Error handling connection {connection_id}: {e}")
         finally:
+            # Cleanup connection
             try:
                 client_socket.close()
             except:
@@ -3372,56 +3743,69 @@ class VirtualDatabaseServer:
             logger.info(
                 f"Processing MySQL query from connection {connection_id}: {query[:100]}...")
 
+            # Parse the command to determine if it's a query
             command_upper = query.strip().upper()
 
             if command_upper.startswith('SHOW'):
+                # Handle SHOW commands properly
                 result = self._handle_show_mysql_command(query, connection_id)
                 if result.get("query_type") in ["SELECT", "SYSTEM"]:
                     return self._build_mysql_result_set_packets(result, sequence_number)
                 else:
                     return [self._build_mysql_ok_packet(sequence_number)]
             elif command_upper.startswith('DESCRIBE') or command_upper.startswith('DESC'):
+                # Handle DESCRIBE commands
                 result = self._handle_explain_query(query, connection_id)
                 if result.get("success") and result.get("rows"):
                     return self._build_mysql_result_set_packets(result, sequence_number)
                 else:
                     return [self._build_mysql_error_packet(sequence_number, result.get("error", "DESCRIBE failed"))]
             elif command_upper.startswith('SELECT'):
+                # Execute SELECT query and return result set
                 result = self._execute_query(query, connection_id)
                 return self._build_mysql_result_set_packets(result, sequence_number)
             elif command_upper.startswith(('INSERT', 'UPDATE', 'DELETE')):
+                # Execute modification query
                 result = self._execute_query(query, connection_id)
                 affected_rows = result.get(
                     "affected_rows", 0) if result.get("success") else 0
                 return [self._build_mysql_ok_packet(sequence_number, affected_rows)]
             elif command_upper.startswith(('CREATE', 'ALTER', 'DROP', 'TRUNCATE', 'RENAME')):
+                # Handle DDL commands
                 result = self._handle_ddl_query(query, connection_id)
                 return [self._build_mysql_ok_packet(sequence_number)]
             elif command_upper.startswith(('BEGIN', 'START', 'COMMIT', 'ROLLBACK', 'SAVEPOINT')):
+                # Handle transaction commands
                 result = self._handle_transaction_query(query, connection_id)
                 return [self._build_mysql_ok_packet(sequence_number)]
             elif command_upper.startswith(('GRANT', 'REVOKE')):
+                # Handle privilege commands
                 result = self._handle_privilege_query(query, connection_id)
                 return [self._build_mysql_ok_packet(sequence_number)]
             elif command_upper.startswith(('LOCK', 'UNLOCK')):
+                # Handle lock commands
                 result = self._handle_lock_query(query, connection_id)
                 return [self._build_mysql_ok_packet(sequence_number)]
             elif command_upper.startswith('EXPLAIN'):
+                # Handle EXPLAIN commands
                 result = self._handle_explain_query(query, connection_id)
                 if result.get("success") and result.get("rows"):
                     return self._build_mysql_result_set_packets(result, sequence_number)
                 else:
                     return [self._build_mysql_error_packet(sequence_number, result.get("error", "EXPLAIN failed"))]
             elif command_upper.startswith(('SET', 'SHOW')):
+                # Handle system commands
                 result = self._handle_system_query(query, connection_id)
                 if result.get("success") and result.get("rows"):
                     return self._build_mysql_result_set_packets(result, sequence_number)
                 else:
                     return [self._build_mysql_ok_packet(sequence_number)]
             elif 'INDEX' in command_upper:
+                # Handle index commands
                 result = self._handle_index_query(query, connection_id)
                 return [self._build_mysql_ok_packet(sequence_number)]
             else:
+                # For other commands, try to execute as passthrough
                 result = self._execute_passthrough_query(query, connection_id)
                 if result.get("success") and result.get("rows"):
                     return self._build_mysql_result_set_packets(result, sequence_number)
@@ -3430,6 +3814,7 @@ class VirtualDatabaseServer:
 
         except Exception as e:
             logger.error(f"Error processing MySQL query: {e}")
+            # Return error packet
             return [self._build_mysql_error_packet(sequence_number, str(e))]
 
     def _build_mysql_result_set_packets(self, result: Dict[str, Any], start_sequence: int) -> List[bytes]:
@@ -3439,6 +3824,7 @@ class VirtualDatabaseServer:
 
         try:
             if not result.get("success", False):
+                # Return error packet
                 return [self._build_mysql_error_packet(sequence_number, result.get("error", "Query failed"))]
 
             if result.get("query_type") == "SELECT":
@@ -3446,35 +3832,42 @@ class VirtualDatabaseServer:
                 columns = result.get("columns", [])
 
                 if not columns:
+                    # No columns - return OK packet
                     packets.append(
                         self._build_mysql_ok_packet(sequence_number))
                     return packets
 
+                # Column count packet
                 column_count_packet = self._build_mysql_column_count_packet(
                     len(columns), sequence_number)
                 packets.append(column_count_packet)
                 sequence_number = (sequence_number + 1) % 256
 
+                # Column definition packets
                 for col_name in columns:
                     col_def_packet = self._build_mysql_column_definition_packet(
                         col_name, sequence_number)
                     packets.append(col_def_packet)
                     sequence_number = (sequence_number + 1) % 256
 
+                # EOF packet after column definitions
                 eof_packet = self._build_mysql_eof_packet(sequence_number)
                 packets.append(eof_packet)
                 sequence_number = (sequence_number + 1) % 256
 
+                # Data row packets
                 for row in rows:
                     row_packet = self._build_mysql_data_row_packet(
                         row, columns, sequence_number)
                     packets.append(row_packet)
                     sequence_number = (sequence_number + 1) % 256
 
+                # Final EOF packet
                 eof_packet = self._build_mysql_eof_packet(sequence_number)
                 packets.append(eof_packet)
 
             else:
+                # Non-SELECT query - return OK
                 packets.append(self._build_mysql_ok_packet(sequence_number))
 
         except Exception as e:
@@ -3496,30 +3889,43 @@ class VirtualDatabaseServer:
         try:
             packet = b""
 
+            # Catalog (length-encoded string)
             packet += self._encode_length_encoded_string("def")
 
+            # Schema (length-encoded string)
             packet += self._encode_length_encoded_string("")
 
+            # Table (length-encoded string)
             packet += self._encode_length_encoded_string("")
 
+            # Org table (length-encoded string)
             packet += self._encode_length_encoded_string("")
 
+            # Name (length-encoded string)
             packet += self._encode_length_encoded_string(column_name)
 
+            # Org name (length-encoded string)
             packet += self._encode_length_encoded_string(column_name)
 
+            # Length of fixed-length fields (1 byte)
             packet += b'\x0c'  # 12 bytes following
 
+            # Character set (2 bytes)
             packet += struct.pack('<H', MYSQL_DEFAULT_CHARSET)
 
+            # Column length (4 bytes)
             packet += struct.pack('<I', 255)  # Default length
 
+            # Column type (1 byte) - VARCHAR
             packet += b'\xfd'  # MYSQL_TYPE_VAR_STRING
 
+            # Flags (2 bytes)
             packet += struct.pack('<H', 0)
 
+            # Decimals (1 byte)
             packet += b'\x00'
 
+            # Filler (2 bytes)
             packet += b'\x00\x00'
 
             packet_length = len(packet)
@@ -3537,13 +3943,17 @@ class VirtualDatabaseServer:
         This ensures VDS always returns plaintext data regardless of console service processing.
         """
         try:
+            # Skip tag columns
             if col_name.startswith('tag_'):
                 return ""
 
+            # If value is None, return empty string
             if value is None:
                 return ""
 
+            # If value is already a string, check if it's actually encrypted hex data
             if isinstance(value, str):
+                # Check if it's a hex string that represents encrypted data
                 if len(value) > 100 and len(value) % 2 == 0 and all(c in '0123456789abcdefABCDEF' for c in value):
                     try:
                         hex_bytes = bytes.fromhex(value)
@@ -3556,8 +3966,10 @@ class VirtualDatabaseServer:
                     except Exception as e:
                         logger.debug(
                             f"VDS DECRYPT: Hex string in {col_name} not encrypted")
+                # Otherwise, it's already decrypted
                 return value
 
+            # If value is bytes, it needs decryption
             if isinstance(value, bytes):
                 try:
                     logger.info(
@@ -3570,8 +3982,10 @@ class VirtualDatabaseServer:
                 except Exception as e:
                     logger.error(
                         f"VDS DECRYPT: Failed to decrypt bytes in {col_name}: {e}")
+                    # If decryption fails, it might not be encrypted - return as hex
                     return value.hex()
 
+            # For any other type, convert to string
             return str(value)
 
         except Exception as e:
@@ -3583,6 +3997,7 @@ class VirtualDatabaseServer:
         """Get common variations of column names for matching"""
         variations = [col_name.lower()]
 
+        # Common variations
         if col_name.lower() == 'emp_id':
             variations.extend(['id', 'employee_id'])
         elif col_name.lower() == 'first_name':
@@ -3598,9 +4013,11 @@ class VirtualDatabaseServer:
         elif col_name.lower() == 'manager_id':
             variations.extend(['mgr_id', 'supervisor_id'])
 
+        # Add underscores and remove them
         if '_' in col_name:
             variations.append(col_name.replace('_', ''))
         else:
+            # Try adding underscores at common places
             import re
             underscored = re.sub(r'([a-z])([A-Z])', r'\1_\2', col_name)
             if underscored != col_name:
@@ -3613,15 +4030,20 @@ class VirtualDatabaseServer:
         Convert any value to a JSON-serializable type
         """
         if isinstance(value, bytes):
+            # Try to decode as UTF-8 string first (for decrypted values)
             try:
                 return value.decode('utf-8')
             except UnicodeDecodeError:
+                # If it can't be decoded as UTF-8, convert to hex string
                 return value.hex()
         elif isinstance(value, (int, float, str, bool, type(None))):
+            # Already JSON serializable
             return value
         elif hasattr(value, '__str__'):
+            # Convert to string
             return str(value)
         else:
+            # Fallback - convert to string representation
             return repr(value)
 
     def _build_mysql_data_row_packet(self, row: Dict[str, Any], columns: List[str], sequence_number: int) -> bytes:
@@ -3632,16 +4054,23 @@ class VirtualDatabaseServer:
             for col_name in columns:
                 value = row.get(col_name, None)
 
+                # Handle NULL values
                 if value is None:
+                    # NULL is represented as 0xFB (251) in MySQL protocol
                     packet += b'\xfb'
                 else:
+                    # Use the same decryption logic as console service for consistency
                     str_value = self._decrypt_value_for_vds(col_name, value)
 
+                    # Encode as UTF-8
                     encoded_value = str_value.encode('utf-8')
 
+                    # Length-encoded: 1 byte length + data (for lengths < 251)
                     if len(encoded_value) < 251:
                         packet += bytes([len(encoded_value)]) + encoded_value
                     else:
+                        # For longer strings, we'd need proper length encoding
+                        # For now, truncate to avoid complexity
                         truncated = encoded_value[:250]
                         packet += bytes([len(truncated)]) + truncated
 
@@ -3661,6 +4090,8 @@ class VirtualDatabaseServer:
 
     def _build_mysql_eof_packet(self, sequence_number: int) -> bytes:
         """Build EOF packet (simplified)"""
+        # EOF packet: 0xfe + warning count (2 bytes) + status flags (2 bytes)
+        # EOF + 2 bytes warnings + 2 bytes status
         packet = bytes([EOF_PACKET, 0x00, 0x00, 0x00, 0x00])
         packet_length = len(packet)
         header = struct.pack('<I', packet_length)[
@@ -3674,14 +4105,19 @@ class VirtualDatabaseServer:
         try:
             packet = b""
 
+            # Error packet header (0xff)
             packet += bytes([ERR_PACKET])
 
+            # Error code (2 bytes)
             packet += struct.pack('<H', 2000)  # Custom error code
 
+            # SQL state marker (#)
             packet += b'#'
 
+            # SQL state (5 bytes)
             packet += b'42000'  # General error
 
+            # Error message
             packet += error_message.encode('utf-8')
 
             packet_length = len(packet)
@@ -3704,14 +4140,18 @@ class VirtualDatabaseServer:
             logger.info(
                 f"Processing command from connection {connection_id}: {command[:100]}...")
 
+            # Parse the command to determine if it's a query
             command_upper = command.strip().upper()
 
             if command_upper.startswith(('SELECT', 'INSERT', 'UPDATE', 'DELETE')):
+                # Execute query
                 result = self._execute_query(command, connection_id)
                 return self._format_query_result(result)
             elif command_upper.startswith('SHOW'):
+                # Handle SHOW commands
                 return self._handle_show_command(command)
             elif command_upper.startswith(('CREATE', 'ALTER', 'DROP')):
+                # Handle DDL commands
                 return self._handle_ddl_command(command)
             else:
                 return f"Command not supported: {command[:50]}..."
@@ -3726,10 +4166,14 @@ class VirtualDatabaseServer:
             logger.info(
                 f"VDS executing query using console service: {query[:100]}...")
 
+            # Use the console service for all query execution to ensure consistency
+            # This provides the same processing as the query console for all SQL operations
             from app.services.console_service import console_service
 
+            # Load migration state for the console service
             migration_state = self.migration_state or self._load_migration_state()
 
+            # Execute the query using console service (same as query console)
             result = console_service.execute_command(
                 query,
                 user_id=f"virtual_client_{connection_id}",
@@ -3761,6 +4205,7 @@ class VirtualDatabaseServer:
                     rows = result.fetchall()
                     column_names = result.keys()
 
+                    # Convert to list of dicts
                     results = []
                     for row in rows:
                         row_dict = {}
@@ -3793,10 +4238,12 @@ class VirtualDatabaseServer:
         """Extract table name from SQL query"""
         import re
 
+        # For SHOW TABLES and similar commands, return a dummy table name
         query_upper = query.strip().upper()
         if query_upper.startswith(('SHOW', 'DESCRIBE', 'EXPLAIN')):
             return "system_tables"  # Dummy table name for system queries
 
+        # Try different patterns
         patterns = [
             r'\bFROM\s+(\w+)',
             r'\bINSERT\s+INTO\s+(\w+)',
@@ -3827,12 +4274,15 @@ class VirtualDatabaseServer:
                 if not rows:
                     return "Empty result set"
 
+                # Format as simple text table
                 output = []
 
+                # Header
                 output.append("| " + " | ".join(columns) + " |")
                 output.append("|" + "|".join("-" * (len(col) + 2)
                               for col in columns) + "|")
 
+                # Data rows
                 for row in rows[:10]:  # Limit to first 10 rows for display
                     row_values = []
                     for col in columns:
@@ -3850,6 +4300,7 @@ class VirtualDatabaseServer:
                 return "\n".join(output)
 
             else:
+                # Non-SELECT queries
                 affected_rows = result.get("affected_rows", 0)
                 return f"Query OK, {affected_rows} rows affected"
 
@@ -3862,6 +4313,7 @@ class VirtualDatabaseServer:
         command_upper = command.upper()
 
         if "SHOW TABLES" in command_upper:
+            # Get list of tables from encrypted database
             try:
                 engine = create_engine(self.encrypted_db_url)
                 inspector = inspect(engine)
@@ -3869,6 +4321,7 @@ class VirtualDatabaseServer:
                 tables = inspector.get_table_names()
                 engine.dispose()
 
+                # Return as result set
                 rows = [{"Tables_in_cryptopix": table} for table in tables]
                 return {
                     "success": True,
@@ -3905,12 +4358,14 @@ class VirtualDatabaseServer:
             command_upper = command.upper()
 
             if "SHOW TABLES" in command_upper:
+                # Get list of tables from encrypted database
                 engine = create_engine(self.encrypted_db_url)
                 inspector = inspect(engine)
 
                 tables = inspector.get_table_names()
                 engine.dispose()
 
+                # Return as result set
                 rows = [{"Tables_in_cryptopix": table} for table in tables]
                 return {
                     "success": True,
@@ -3930,6 +4385,7 @@ class VirtualDatabaseServer:
                 }
 
             elif "SHOW VARIABLES" in command_upper or "SHOW STATUS" in command_upper:
+                # Return some basic system variables
                 variables = [
                     {"Variable_name": "version", "Value": "CryptoPIX Bridge v3.0"},
                     {"Variable_name": "version_comment",
@@ -3949,6 +4405,7 @@ class VirtualDatabaseServer:
                 }
 
             elif "SHOW PROCESSLIST" in command_upper:
+                # Return virtual connection info
                 processes = [{
                     "Id": connection_id,
                     "User": "virtual_client",
@@ -3985,9 +4442,11 @@ class VirtualDatabaseServer:
     def _describe_table(self, table_name: str, connection_id: int) -> Dict[str, Any]:
         """Handle DESCRIBE table command"""
         try:
+            # Get table schema from encrypted database
             engine = create_engine(self.encrypted_db_url)
             inspector = inspect(engine)
 
+            # Check if table exists
             if not inspector.has_table(table_name):
                 engine.dispose()
                 return {
@@ -3996,14 +4455,18 @@ class VirtualDatabaseServer:
                     "query_type": "EXPLAIN"
                 }
 
+            # Get column information
             columns = inspector.get_columns(table_name)
             engine.dispose()
 
+            # Format as DESCRIBE result
             rows = []
             for col in columns:
+                # Skip tag columns in output
                 if col['name'].startswith('tag_'):
                     continue
 
+                # Determine if column is encrypted based on migration state
                 is_encrypted = False
                 if self.migration_state and self.migration_state.get('table_configs'):
                     table_config = self.migration_state['table_configs'].get(
@@ -4042,6 +4505,7 @@ class VirtualDatabaseServer:
         try:
             logger.info(f"VDS executing DDL command: {command[:100]}...")
 
+            # Execute DDL directly on encrypted database
             result = self._execute_direct_query(command, "system")
 
             if result.get("success"):
@@ -4071,6 +4535,7 @@ class VirtualDatabaseClient:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.connect((self.host, self.port))
 
+            # Receive welcome message
             welcome = self.socket.recv(1024).decode()
             print(f"Connected: {welcome.strip()}")
 
@@ -4087,8 +4552,10 @@ class VirtualDatabaseClient:
             raise Exception("Not connected to database")
 
         try:
+            # Send query
             self.socket.send((query + ";").encode())
 
+            # Receive response
             response = b""
             while True:
                 chunk = self.socket.recv(4096)
@@ -4096,6 +4563,7 @@ class VirtualDatabaseClient:
                     break
                 response += chunk
 
+                # Check if response is complete (simple check)
                 if response.endswith(b"\n"):
                     break
 
@@ -4115,6 +4583,7 @@ class VirtualDatabaseClient:
             self.socket = None
 
 
+# Global VDS instance
 virtual_db_server = None
 
 
@@ -4156,6 +4625,7 @@ def start_virtual_server(host: str = "0.0.0.0",
         max_connections=max_connections
     )
 
+    # Start the server (it handles its own threading)
     virtual_db_server.start()
 
     logger.info(f"Virtual Database Server (VDS) started successfully")
@@ -4180,13 +4650,18 @@ def stop_virtual_server():
 def create_client_example():
     """Example of how clients can connect to virtual database"""
     print("""
+# Example: Client Application Connection
 
 from app.virtual_db_server import VirtualDatabaseClient
 
+# Instead of connecting directly to encrypted database:
+# conn = pymysql.connect(host="encrypted-server", user="user", password="pass", database="mydb")
 
+# Connect to virtual database server:
 client = VirtualDatabaseClient(host="127.0.0.1", port=3307)
 client.connect()
 
+# Execute queries normally - encryption/decryption happens transparently
 result = client.execute("SELECT name, email FROM users WHERE age > 30")
 print(result)
 
@@ -4198,11 +4673,14 @@ client.close()
 
 
 if __name__ == "__main__":
+    # Example usage
     logging.basicConfig(level=logging.INFO)
 
+    # Start server
     server = start_virtual_server(port=3307)
 
     try:
+        # Keep running
         while True:
             time.sleep(1)
     except KeyboardInterrupt:

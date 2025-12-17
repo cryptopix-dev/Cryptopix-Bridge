@@ -34,4 +34,5 @@ class AuditLogger:
 
         logger.info(f"AUDIT: {log_entry}")
 
+# Global audit logger instance
 audit_logger = AuditLogger()

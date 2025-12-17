@@ -51,21 +51,27 @@ class EnhancedSQLTranslator(SQLTranslator):
     def __init__(self):
         super().__init__()
 
+        # AI Learning components
         self.query_patterns: Dict[str, QueryPattern] = {}
         self.learning_enabled = True
         self.pattern_memory_size = 500
 
+        # Batch decryption settings
         self.max_batch_size = 10000  # Maximum rows to decrypt at once
         self.decryption_timeout = 30  # seconds
         self.security_audit_enabled = True
 
+        # Performance tracking
         self.performance_metrics: Dict[str, List[float]] = {}
 
+        # Initialize AI learning
         self._load_learned_patterns()
 
     def _load_learned_patterns(self):
         """Load previously learned query patterns"""
         try:
+            # In a real implementation, this would load from a persistent store
+            # For now, initialize with common patterns
             self._initialize_common_patterns()
         except Exception as e:
             logger.warning(f"Failed to load learned patterns: {e}")
@@ -110,21 +116,27 @@ class EnhancedSQLTranslator(SQLTranslator):
         start_time = time.time()
 
         try:
+            # Analyze query for encrypted operations
             encrypted_ops = self._analyze_encrypted_operations(query, table_name)
 
             if encrypted_ops:
                 logger.info(f"Detected encrypted operations: {encrypted_ops}")
 
+                # Check if we can handle this with batch decryption
                 if self._should_use_batch_decryption(query, encrypted_ops):
                     translated_query, metadata = self._translate_with_batch_decryption(query, table_name, encrypted_ops)
                 else:
+                    # Fall back to standard translation
                     translated_query, metadata = super().translate_query(query, table_name)
             else:
+                # No encrypted operations, use standard translation
                 translated_query, metadata = super().translate_query(query, table_name)
 
+            # Learn from this translation
             if self.learning_enabled:
                 self._learn_from_query(query, encrypted_ops, time.time() - start_time, metadata.get("translation_success", False))
 
+            # Add enhanced metadata
             metadata.update({
                 "enhanced_translation": True,
                 "encrypted_operations_detected": encrypted_ops,
@@ -136,6 +148,7 @@ class EnhancedSQLTranslator(SQLTranslator):
 
         except Exception as e:
             logger.error(f"Enhanced translation failed: {e}")
+            # Fall back to standard translation
             return super().translate_query(query, table_name)
 
     def _analyze_encrypted_operations(self, query: str, table_name: str = None) -> List[str]:
@@ -144,24 +157,30 @@ class EnhancedSQLTranslator(SQLTranslator):
         """
         operations = []
 
+        # Get table mapping
         table_mapping = self._extract_table_mapping(query) if not table_name else self.table_mappings.get(table_name)
         if not table_mapping:
             return operations
 
         query_upper = query.upper()
 
+        # Check for mathematical operations on encrypted columns
         for col_name, col_mapping in table_mapping.encrypted_columns.items():
             if col_mapping.is_encrypted:
+                # Check for arithmetic operations
                 if re.search(rf'\b{col_name}\b\s*[\+\-\*\/]', query):
                     operations.append(f"arithmetic:{col_name}")
 
+                # Check for aggregate functions
                 for agg_func in ['AVG', 'SUM', 'MIN', 'MAX', 'COUNT']:
                     if re.search(rf'\b{agg_func}\s*\(\s*{col_name}\s*\)', query_upper):
                         operations.append(f"aggregate:{agg_func}:{col_name}")
 
+                # Check for CASE statements
                 if 'CASE' in query_upper and col_name in query:
                     operations.append(f"case:{col_name}")
 
+                # Check for window functions
                 for win_func in ['ROW_NUMBER', 'RANK', 'LAG', 'LEAD']:
                     if re.search(rf'\b{win_func}\s*\(\s*.*\b{col_name}\b.*\)', query_upper):
                         operations.append(f"window:{win_func}:{col_name}")
@@ -175,19 +194,24 @@ class EnhancedSQLTranslator(SQLTranslator):
         if not encrypted_ops:
             return False
 
+        # Check query complexity
         query_complexity = len(encrypted_ops)
 
+        # Check if operations are supported by batch decryption
         supported_ops = ['arithmetic', 'aggregate', 'case', 'window']
         has_unsupported = any(not any(op.startswith(supported) for supported in supported_ops) for op in encrypted_ops)
 
         if has_unsupported:
             return False
 
+        # Check performance patterns
         query_hash = hashlib.md5(query.encode()).hexdigest()
         if query_hash in self.query_patterns:
             pattern = self.query_patterns[query_hash]
+            # Use batch decryption if pattern has good success rate
             return pattern.success_rate > 0.8
 
+        # Default decision based on complexity
         return query_complexity <= 3  # Allow up to 3 encrypted operations
 
     def _translate_with_batch_decryption(self, query: str, table_name: str, encrypted_ops: List[str]) -> Tuple[str, Dict[str, Any]]:
@@ -196,6 +220,7 @@ class EnhancedSQLTranslator(SQLTranslator):
         """
         logger.info(f"Translating with batch decryption for operations: {encrypted_ops}")
 
+        # Create batch decryption context
         context = BatchDecryptionContext(
             query_id=hashlib.md5(f"{query}{time.time()}".encode()).hexdigest(),
             table_name=table_name,
@@ -209,12 +234,14 @@ class EnhancedSQLTranslator(SQLTranslator):
             }
         )
 
+        # Extract columns that need decryption
         for op in encrypted_ops:
             parts = op.split(':')
             if len(parts) >= 2:
                 col_name = parts[-1]  # Last part is column name
                 context.encrypted_columns_needed.add(col_name)
 
+        # Generate modified query that will work with decrypted data
         modified_query = self._generate_batch_decryption_query(query, context)
 
         metadata = {
@@ -234,29 +261,37 @@ class EnhancedSQLTranslator(SQLTranslator):
         """
         Generate a query that can work with batch-decrypted data
         """
+        # For now, create a query that selects the needed encrypted columns
+        # In a full implementation, this would be more sophisticated
 
         table_mapping = self.table_mappings.get(context.table_name)
         if not table_mapping:
             return original_query
 
+        # Build SELECT clause with decrypted column names
         select_parts = []
 
+        # Add encrypted columns that need decryption
         for col_name in context.encrypted_columns_needed:
             if col_name in table_mapping.encrypted_columns:
                 select_parts.append(col_name)  # Use original name for decrypted results
 
+        # Add non-encrypted columns
         for col_name in table_mapping.non_encrypted_columns:
             select_parts.append(col_name)
 
+        # If no specific columns, select all
         if not select_parts:
             select_clause = "*"
         else:
             select_clause = ", ".join(select_parts)
 
+        # Extract WHERE, ORDER BY, etc. from original query
         where_clause = ""
         order_by_clause = ""
         limit_clause = ""
 
+        # Simple extraction - in production, use more robust parsing
         where_match = re.search(r'WHERE\s+(.+?)(?:\s+(?:ORDER|GROUP|HAVING|LIMIT|$))', original_query, re.IGNORECASE | re.DOTALL)
         if where_match:
             where_clause = f"WHERE {where_match.group(1)}"
@@ -271,8 +306,10 @@ class EnhancedSQLTranslator(SQLTranslator):
             if limit_match.group(2):
                 limit_clause += f" OFFSET {limit_match.group(2)}"
 
+        # Construct the batch query
         batch_query = f"SELECT {select_clause} FROM {context.table_name} {where_clause} {order_by_clause} {limit_clause}".strip()
 
+        # Limit batch size for security
         if "LIMIT" not in batch_query.upper():
             batch_query += f" LIMIT {context.batch_size}"
 
@@ -286,20 +323,26 @@ class EnhancedSQLTranslator(SQLTranslator):
         start_time = time.time()
 
         try:
+            # Execute the batch query to get encrypted data
             batch_context = context.get("batch_decryption_context", {})
             batch_query = context.get("translated_query", query)
 
+            # Execute query
             cursor = db_connection.cursor()
             cursor.execute(batch_query)
             encrypted_rows = cursor.fetchall()
 
+            # Convert to dict format
             column_names = [desc[0] for desc in cursor.description]
             encrypted_rows = [dict(zip(column_names, row)) for row in encrypted_rows]
 
+            # Batch decrypt the data
             decrypted_rows = self._batch_decrypt_rows(encrypted_rows, table_mapping, batch_context)
 
+            # Perform calculations on decrypted data
             result_rows = self._perform_calculations_on_decrypted_data(query, decrypted_rows, table_mapping)
 
+            # Log security event
             if self.security_audit_enabled:
                 self._log_security_event(batch_context, len(encrypted_rows), time.time() - start_time)
 
@@ -347,8 +390,10 @@ class EnhancedSQLTranslator(SQLTranslator):
         if not rows:
             return rows
 
+        # Parse the original query to understand what calculations to perform
         query_upper = original_query.upper()
 
+        # Handle different types of calculations
         if 'AVG(' in query_upper:
             return self._calculate_aggregates(original_query, rows, 'AVG')
         elif 'SUM(' in query_upper:
@@ -362,12 +407,14 @@ class EnhancedSQLTranslator(SQLTranslator):
         elif 'CASE' in query_upper:
             return self._calculate_case_statements(original_query, rows)
         else:
+            # No calculations needed, return as-is
             return rows
 
     def _calculate_aggregates(self, query: str, rows: List[Dict[str, Any]], agg_func: str) -> List[Dict[str, Any]]:
         """
         Calculate aggregate functions on decrypted data
         """
+        # Extract the column being aggregated
         pattern = rf'\b{agg_func}\s*\(\s*(\w+)\s*\)'
         match = re.search(pattern, query, re.IGNORECASE)
 
@@ -380,6 +427,7 @@ class EnhancedSQLTranslator(SQLTranslator):
         if not rows:
             return [{alias: None}]
 
+        # Extract values
         values = []
         for row in rows:
             if col_name in row and row[col_name] is not None:
@@ -391,6 +439,7 @@ class EnhancedSQLTranslator(SQLTranslator):
         if not values:
             return [{alias: None}]
 
+        # Calculate aggregate
         if agg_func == 'AVG':
             result = sum(values) / len(values)
         elif agg_func == 'SUM':
@@ -413,10 +462,12 @@ class EnhancedSQLTranslator(SQLTranslator):
         for row in rows:
             result_row = row.copy()
 
+            # Look for arithmetic expressions in SELECT clause
             select_match = re.search(r'SELECT\s+(.+?)\s+FROM', query, re.IGNORECASE | re.DOTALL)
             if select_match:
                 select_clause = select_match.group(1)
 
+                # Simple arithmetic pattern: column * number
                 arith_match = re.search(r'(\w+)\s*([\+\-\*\/])\s*(\d+(?:\.\d+)?)', select_clause)
                 if arith_match:
                     col_name = arith_match.group(1)
@@ -454,12 +505,14 @@ class EnhancedSQLTranslator(SQLTranslator):
         for row in rows:
             result_row = row.copy()
 
+            # Simple CASE pattern: CASE WHEN column > value THEN 'result'
             case_match = re.search(r'CASE\s+WHEN\s+(\w+)\s*>\s*(\d+(?:\.\d+)?)\s+THEN\s+[\'"]([^\'"]+)[\'"]', query, re.IGNORECASE)
             if case_match:
                 col_name = case_match.group(1)
                 threshold = float(case_match.group(2))
                 true_result = case_match.group(3)
 
+                # Check for ELSE
                 else_match = re.search(r'ELSE\s+[\'"]([^\'"]+)[\'"]', query, re.IGNORECASE)
                 false_result = else_match.group(1) if else_match else 'Low'
 
@@ -487,6 +540,7 @@ class EnhancedSQLTranslator(SQLTranslator):
         query_hash = hashlib.md5(query.encode()).hexdigest()
 
         if query_hash not in self.query_patterns:
+            # Create new pattern
             self.query_patterns[query_hash] = QueryPattern(
                 pattern_hash=query_hash,
                 query_template=self._extract_query_template(query),
@@ -497,16 +551,21 @@ class EnhancedSQLTranslator(SQLTranslator):
                 last_used=datetime.now()
             )
         else:
+            # Update existing pattern
             pattern = self.query_patterns[query_hash]
             pattern.usage_count += 1
             pattern.last_used = datetime.now()
 
+            # Update success rate with exponential moving average
             alpha = 0.1
             pattern.success_rate = alpha * (1.0 if success else 0.0) + (1 - alpha) * pattern.success_rate
 
+            # Update execution time average
             pattern.execution_time_avg = (pattern.execution_time_avg * (pattern.usage_count - 1) + execution_time) / pattern.usage_count
 
+        # Maintain pattern memory size
         if len(self.query_patterns) > self.pattern_memory_size:
+            # Remove oldest pattern
             oldest_key = min(self.query_patterns.keys(),
                            key=lambda k: self.query_patterns[k].last_used)
             del self.query_patterns[oldest_key]
@@ -515,9 +574,12 @@ class EnhancedSQLTranslator(SQLTranslator):
         """
         Extract template from query by replacing literals with placeholders
         """
+        # Replace numbers
         template = re.sub(r'\b\d+(?:\.\d+)?\b', '{number}', query)
+        # Replace quoted strings
         template = re.sub(r"'[^']*'", '{string}', template)
         template = re.sub(r'"[^"]*"', '{string}', template)
+        # Replace column names (simple heuristic)
         template = re.sub(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b(?!\s*\()', '{column}', template)
 
         return template
@@ -542,6 +604,7 @@ class EnhancedSQLTranslator(SQLTranslator):
 
         logger.info(f"Security audit: Batch decryption event - {json.dumps(event)}")
 
+        # In production, this would be stored in a secure audit log
 
     def get_ai_insights(self) -> Dict[str, Any]:
         """
@@ -585,4 +648,5 @@ class EnhancedSQLTranslator(SQLTranslator):
         }
 
 
+# Global enhanced translator instance
 enhanced_sql_translator = EnhancedSQLTranslator()

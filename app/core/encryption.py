@@ -32,8 +32,10 @@ class CLWEEncryptor:
         if not CLWE_AVAILABLE:
             raise CLWEEncryptionError("Cryptopix-CLWE library not available. Please install 'cryptopix-clwe' package.")
 
+        # Initialize CLWE components
         self.cipher = ColorCipher()
 
+        # CLWE Security levels (Min, Bal, Max)
         self.security_levels = {
             "Min": {
                 "clwe_level": "Min",
@@ -80,15 +82,18 @@ class CLWEEncryptor:
             Encrypted data as bytes (BLOB)
         """
         try:
+            # Determine security level
             level = security_level or self.default_level
             if level not in self.security_levels:
                 raise CLWEEncryptionError(f"Invalid security level: {level}")
 
+            # Convert data to string
             if isinstance(data, (dict, list)):
                 data_str = json.dumps(data, separators=(',', ':'))
             else:
                 data_str = str(data)
 
+            # Use CLWE visual steganography with deterministic mode for database searching
             if deterministic:
                 webp_image_data = self.cipher.encrypt_to_image(data_str, password, mode="SOP")
                 logger.info(f"✅ Data encrypted deterministically to WebP image successfully. Level: {level}, Size: {len(webp_image_data)} bytes")
@@ -114,6 +119,7 @@ class CLWEEncryptor:
         Returns:
             Encrypted value as bytes (BLOB)
         """
+        # Convert value to string representation
         if value is None:
             value_str = ""
         else:
@@ -154,9 +160,11 @@ class CLWEEncryptor:
             Original decrypted data as string
         """
         try:
+            # Use CLWE visual steganography decryption
             decrypted_result = self.cipher.decrypt_from_image(encrypted_blob, password)
             logger.info("✅ Data decrypted from WebP image successfully")
 
+            # Handle different return types from CLWE library
             if isinstance(decrypted_result, str):
                 return decrypted_result
             elif isinstance(decrypted_result, bytes):
@@ -184,6 +192,7 @@ class CLWEEncryptor:
         """
         decrypted_str = self.decrypt_data(encrypted_blob, password)
 
+        # Try to parse as JSON, otherwise return as string
         try:
             return json.loads(decrypted_str)
         except (json.JSONDecodeError, TypeError):
@@ -226,6 +235,7 @@ class CLWEEncryptor:
             Unified 20-character tag string
         """
         try:
+            # Convert data to string representation
             if data is None:
                 data_str = ""
             else:
@@ -233,18 +243,23 @@ class CLWEEncryptor:
 
             logger.debug(f"Generating unified tag for data: {data_str[:50]}..., type: {data_type}")
 
+            # Component 1: Order-preserving encryption (8 chars)
             ope_value = self._generate_order_preserving_value(data, data_type)[:8]
             logger.debug(f"OPE value: {ope_value}")
 
+            # Component 2: Partial match hash for LIKE queries (8 chars)
             partial_hash = self._generate_partial_hash(data_str)[:8]
             logger.debug(f"Partial hash: {partial_hash}")
 
+            # Component 3: Type-specific metadata (4 chars)
             metadata = self._generate_type_metadata(data, data_type)[:4]
             logger.debug(f"Metadata: {metadata}")
 
+            # Combine all components into unified tag
             unified_tag = ope_value + partial_hash + metadata
             logger.debug(f"Combined tag before padding: {unified_tag} (length: {len(unified_tag)})")
 
+            # Ensure exactly 20 characters
             if len(unified_tag) < 20:
                 unified_tag = unified_tag.ljust(20, '0')
             elif len(unified_tag) > 20:
@@ -255,12 +270,14 @@ class CLWEEncryptor:
 
         except Exception as e:
             logger.error(f"Unified tag generation failed for data: {data}, type: {data_type}, error: {e}")
+            # Instead of raising an exception, return a fallback tag to prevent INSERT failures
             fallback_tag = "0" * 20
             logger.warning(f"Using fallback tag: {fallback_tag}")
             return fallback_tag
 
     def _generate_exact_hash(self, data: str) -> str:
         """Generate exact match hash component"""
+        # Use SHA-256 for deterministic exact matching
         salt = getattr(settings, 'tag_salt', 'cryptopix_default_salt')
         salted_data = f"exact:{salt}:{data}"
         hash_obj = hashlib.sha256(salted_data.encode('utf-8'))
@@ -271,24 +288,33 @@ class CLWEEncryptor:
         if data is None:
             return "0" * 8
 
+        # Convert data to string for consistent processing
         data_str = str(data) if data is not None else ""
 
+        # Convert to numeric value for ordering
         if data_type in ['integer', 'decimal', 'numeric']:
             try:
                 numeric_value = float(data)
+                # Simple OPE: add offset and convert to hex
+                # This preserves ordering: smaller values -> smaller hex
                 ope_value = int((numeric_value + 1000000) * 1000)  # Offset to handle negatives
                 return f"{ope_value & 0xFFFFFFFF:08x}"  # 8-character hex
             except (ValueError, TypeError):
+                # Fallback if conversion fails
                 hash_val = hash(data_str) % (2**64)
                 return f"{hash_val & 0xFFFFFFFF:08x}"
 
+        # For text data, use lexicographic ordering
         if data_type in ['text', 'varchar', 'char'] or isinstance(data, str):
+            # Convert first 8 characters to numeric representation
             text_value = 0
             for i, char in enumerate(data_str[:8]):
                 text_value += ord(char) * (256 ** i)
             return f"{text_value & 0xFFFFFFFF:08x}"
 
+        # For dates, convert to timestamp
         if data_type == 'date' or 'date' in data_str.lower():
+            # Simple date parsing and conversion
             import re
             date_match = re.search(r'(\d{4})-(\d{2})-(\d{2})', data_str)
             if date_match:
@@ -296,6 +322,7 @@ class CLWEEncryptor:
                 timestamp = year * 10000 + month * 100 + day
                 return f"{timestamp & 0xFFFFFFFF:08x}"
 
+        # Fallback: hash-based ordering (not perfect but deterministic)
         hash_val = hash(data_str) % (2**64)
         return f"{hash_val & 0xFFFFFFFF:08x}"
 
@@ -304,6 +331,7 @@ class CLWEEncryptor:
         if not data:
             return "0" * 8
 
+        # Create multiple partial hashes for different prefix lengths
         partial_hashes = []
         max_prefix_length = min(len(data), 8)  # Support up to 8 characters
         for length in range(1, max_prefix_length + 1):  # Prefix lengths from 1 to max
@@ -313,6 +341,7 @@ class CLWEEncryptor:
             hash_obj = hashlib.sha256(salted_prefix.encode('utf-8'))
             partial_hashes.append(hash_obj.hexdigest()[:1])  # 1 char per prefix
 
+        # Combine partial hashes, pad to 8 chars
         combined = "".join(partial_hashes)
         return combined.ljust(8, '0')[:8]
 
@@ -320,6 +349,7 @@ class CLWEEncryptor:
         """Generate type-specific metadata"""
         metadata = ""
 
+        # Data type indicator (1 char)
         type_codes = {
             'text': 'T', 'varchar': 'V', 'char': 'C',
             'integer': 'I', 'bigint': 'B', 'smallint': 'S',
@@ -329,12 +359,15 @@ class CLWEEncryptor:
         }
         metadata += type_codes.get(data_type.lower() if data_type else 'text', 'U')
 
+        # Length information (2 chars hex)
         data_str = str(data) if data is not None else ""
         length = min(len(data_str), 255)  # Cap at 255
         metadata += f"{length:02x}"
 
+        # Null indicator (1 char)
         metadata += 'N' if data is None else 'V'
 
+        # Ensure exactly 4 chars
         if len(metadata) < 4:
             metadata = metadata.ljust(4, '0')
         elif len(metadata) > 4:
@@ -378,6 +411,7 @@ class CLWEEncryptor:
              1 if ope1 > ope2
         """
         try:
+            # Convert hex to int for comparison
             val1 = int(ope1, 16) if ope1 else 0
             val2 = int(ope2, 16) if ope2 else 0
 
@@ -390,6 +424,7 @@ class CLWEEncryptor:
         except:
             return 0
 
+    # Legacy method for backward compatibility
     def generate_tag(self,
                        data: str,
                        tag_type: str = "exact",
@@ -416,6 +451,7 @@ class CLWEEncryptor:
 
 
 
+# Global CLWE encryptor instance (only created if library is available)
 try:
     clwe_encryptor = CLWEEncryptor()
 except CLWEEncryptionError:
