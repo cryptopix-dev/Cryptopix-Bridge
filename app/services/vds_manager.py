@@ -390,6 +390,109 @@ class VDSManager:
         """
         return sum(1 for vds in self.vds_instances.values() if vds.running)
 
+    def get_vds_uptime(self, db_id: str, vds_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get uptime information for a VDS instance.
+        
+        Args:
+            db_id: Database ID
+            vds_id: VDS instance ID
+            
+        Returns:
+            Dictionary with uptime information or None if not found
+        """
+        try:
+            from datetime import datetime, timezone, timedelta
+            
+            # Get VDS instance info from registry
+            vds_info = database_registry.get_vds_instance(db_id, vds_id)
+            if not vds_info:
+                return None
+            
+            # Check if VDS is currently running
+            instance_key = (vds_info["host"], vds_info["port"])
+            is_running = instance_key in self.vds_instances and self.vds_instances[instance_key].running
+            
+            if not is_running:
+                return {
+                    "status": "stopped",
+                    "uptime_seconds": 0,
+                    "uptime_formatted": "0h 0m 0s",
+                    "last_started": vds_info.get("last_started"),
+                    "last_stopped": vds_info.get("last_stopped")
+                }
+            
+            # Calculate uptime from last_started
+            last_started_str = vds_info.get("last_started")
+            if not last_started_str:
+                return {
+                    "status": "running",
+                    "uptime_seconds": 0,
+                    "uptime_formatted": "0h 0m 0s",
+                    "last_started": None,
+                    "last_stopped": vds_info.get("last_stopped")
+                }
+            
+            # Parse the timestamp (it's in IST format)
+            last_started = datetime.fromisoformat(last_started_str)
+            
+            # Get current IST time
+            IST = timezone(timedelta(hours=5, minutes=30))
+            now = datetime.now(IST)
+            
+            # Calculate uptime
+            uptime_delta = now - last_started
+            uptime_seconds = int(uptime_delta.total_seconds())
+            
+            # Format uptime
+            days = uptime_seconds // 86400
+            hours = (uptime_seconds % 86400) // 3600
+            minutes = (uptime_seconds % 3600) // 60
+            seconds = uptime_seconds % 60
+            
+            if days > 0:
+                uptime_formatted = f"{days}d {hours}h {minutes}m"
+            elif hours > 0:
+                uptime_formatted = f"{hours}h {minutes}m {seconds}s"
+            else:
+                uptime_formatted = f"{minutes}m {seconds}s"
+            
+            return {
+                "status": "running",
+                "uptime_seconds": uptime_seconds,
+                "uptime_formatted": uptime_formatted,
+                "uptime_days": days,
+                "uptime_hours": hours,
+                "uptime_minutes": minutes,
+                "uptime_seconds_remaining": seconds,
+                "last_started": last_started_str,
+                "last_stopped": vds_info.get("last_stopped")
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get VDS uptime: {e}")
+            return None
+
+    def list_vds_instances(self, db_id: str) -> list:
+        """
+        List all VDS instances for a specific database.
+        
+        Args:
+            db_id: Database ID
+            
+        Returns:
+            List of VDS instance dictionaries
+        """
+        try:
+            database = database_registry.get_database(db_id)
+            if not database:
+                return []
+            
+            return database.get("vds_instances", [])
+        except Exception as e:
+            logger.error(f"Failed to list VDS instances for db {db_id}: {e}")
+            return []
+
     def remove_vds_instance(self, db_id: str, vds_id: str) -> bool:
         """
         Remove a VDS instance (stops it first if running).

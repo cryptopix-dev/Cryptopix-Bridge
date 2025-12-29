@@ -10,7 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="/static/styles.css">
-   
+
 </head>
 
 <body>
@@ -113,7 +113,7 @@
             </div>
             <br>
             <br>
-            
+
 
             <input type="hidden" name="source_url_generated" id="sourceUrlGenerated">
             <input type="hidden" name="encrypted_url_generated" id="encryptedUrlGenerated">
@@ -121,21 +121,21 @@
 
             <div class="config-list">
                 <div class="detail-card" id="sourceCard">
-                <div class="card-header">
-                    <h5><i class="bi bi-database me-2"></i>Source Database Configuration</h5>
-                </div>
-                <div class="card-body">
+                    <div class="card-header">
+                        <h5><i class="bi bi-database me-2"></i>Source Database Configuration</h5>
+                    </div>
+                    <div class="card-body">
 
-                <div class="form-section active" id="sourceGuidedSection">
-                    <div class="form-group">
-                        <label class="form-label">Database Type:</label>
-                        <div class="db-type-selector">
-                            <div class="db-type-option" data-type="mysql" data-prefix="source">
-                                <input type="radio" name="source_db_type" value="mysql" id="source_mysql">
-                                <i class="bi bi-database db-icon"></i>
-                                <div class="db-name">MySQL</div>
-                            </div>
-                            <div class="db-type-option" data-type="postgresql" data-prefix="source">
+                        <div class="form-section active" id="sourceGuidedSection">
+                            <div class="form-group">
+                                <label class="form-label">Database Type:</label>
+                                <div class="db-type-selector">
+                                    <div class="db-type-option" data-type="mysql" data-prefix="source">
+                                        <input type="radio" name="source_db_type" value="mysql" id="source_mysql">
+                                        <i class="bi bi-database db-icon"></i>
+                                        <div class="db-name">MySQL</div>
+                                    </div>
+                                    <!-- <div class="db-type-option" data-type="postgresql" data-prefix="source">
                                 <input type="radio" name="source_db_type" value="postgresql" id="source_postgresql">
                                 <i class="bi bi-server db-icon"></i>
                                 <div class="db-name">PostgreSQL</div>
@@ -169,81 +169,81 @@
                                 <input type="radio" name="source_db_type" value="cassandra" id="source_cassandra">
                                 <i class="bi bi-pentagon db-icon"></i>
                                 <div class="db-name">Cassandra</div>
+                            </div> -->
+                                </div>
+                            </div>
+
+                            <div class="connection-grid">
+                                <div class="form-group">
+                                    <label class="form-label" for="source_host">Host:</label>
+                                    <input type="text" class="form-control" name="source_host" id="source_host"
+                                        placeholder="localhost" value="localhost">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="source_port">Port:</label>
+                                    <input type="text" class="form-control" name="source_port" id="source_port"
+                                        placeholder="3306">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="source_username">Username:</label>
+                                    <input type="text" class="form-control" name="source_username" id="source_username"
+                                        placeholder="username">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="source_password">Password:</label>
+                                    <input type="password" class="form-control" name="source_password"
+                                        id="source_password" placeholder="password">
+                                </div>
+                                <div class="form-group" style="grid-column: 1 / -1;">
+                                    <label class="form-label" for="source_database">Database Name:</label>
+                                    <input type="text" class="form-control" name="source_database" id="source_database"
+                                        placeholder="source_database">
+                                </div>
+                            </div>
+
+                            <div class="url-preview" id="sourceUrlPreview">
+                                <div class="url-preview-label">Generated Connection URL:</div>
+                                <span id="sourceUrlText">Configure database settings to see preview</span>
+                            </div>
+                        </div>
+
+                        <div class="form-section" id="sourceManualSection">
+                            <div class="form-group">
+                                <label class="form-label" for="source_url">Source Database URL:</label>
+                                <input type="text" class="form-control" name="source_url" id="source_url"
+                                    placeholder="mysql://user:password@localhost:3306/source_db">
+                                <div class="input-help">Enter the complete connection URL for your source database</div>
+                                <div class="connection-examples">
+                                    <strong>Connection URL Examples:</strong><br>
+                                    MySQL: mysql://user:password@localhost:3306/database<br>
+                                    <!-- PostgreSQL: postgresql://user:password@localhost:5432/database<br>
+                                    SQLite: sqlite:///path/to/database.db<br>
+                                    MongoDB: mongodb://user:password@localhost:27017/database<br>
+                                    Oracle: oracle://user:password@localhost:1521/database<br>
+                                    SQL Server: mssql://user:password@localhost:1433/database<br>
+                                    Redis: redis://:password@localhost:6379/0<br>
+                                    Cassandra: cassandra://user:password@localhost:9042/keyspace -->
+                                </div>
                             </div>
                         </div>
                     </div>
-
-                    <div class="connection-grid">
-                        <div class="form-group">
-                            <label class="form-label" for="source_host">Host:</label>
-                            <input type="text" class="form-control" name="source_host" id="source_host"
-                                placeholder="localhost" value="localhost">
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" for="source_port">Port:</label>
-                            <input type="text" class="form-control" name="source_port" id="source_port"
-                                placeholder="3306">
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" for="source_username">Username:</label>
-                            <input type="text" class="form-control" name="source_username" id="source_username"
-                                placeholder="username">
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" for="source_password">Password:</label>
-                            <input type="password" class="form-control" name="source_password" id="source_password"
-                                placeholder="password">
-                        </div>
-                        <div class="form-group" style="grid-column: 1 / -1;">
-                            <label class="form-label" for="source_database">Database Name:</label>
-                            <input type="text" class="form-control" name="source_database" id="source_database"
-                                placeholder="source_database">
-                        </div>
-                    </div>
-
-                    <div class="url-preview" id="sourceUrlPreview">
-                        <div class="url-preview-label">Generated Connection URL:</div>
-                        <span id="sourceUrlText">Configure database settings to see preview</span>
-                    </div>
                 </div>
-
-                <div class="form-section" id="sourceManualSection">
-                    <div class="form-group">
-                        <label class="form-label" for="source_url">Source Database URL:</label>
-                        <input type="text" class="form-control" name="source_url" id="source_url"
-                            placeholder="mysql://user:password@localhost:3306/source_db">
-                        <div class="input-help">Enter the complete connection URL for your source database</div>
-                        <div class="connection-examples">
-                            <strong>Connection URL Examples:</strong><br>
-                            MySQL: mysql://user:password@localhost:3306/database<br>
-                            PostgreSQL: postgresql://user:password@localhost:5432/database<br>
-                            SQLite: sqlite:///path/to/database.db<br>
-                            MongoDB: mongodb://user:password@localhost:27017/database<br>
-                            Oracle: oracle://user:password@localhost:1521/database<br>
-                            SQL Server: mssql://user:password@localhost:1433/database<br>
-                            Redis: redis://:password@localhost:6379/0<br>
-                            Cassandra: cassandra://user:password@localhost:9042/keyspace
-                        </div>
+                <div class="detail-card" id="encryptedCard">
+                    <div class="card-header">
+                        <h5><i class="bi bi-shield-lock me-2"></i>Encrypted Database Configuration</h5>
                     </div>
-                </div>
-               </div>
-</div>
-            <div class="detail-card" id="encryptedCard">
-                <div class="card-header">
-                    <h5><i class="bi bi-shield-lock me-2"></i>Encrypted Database Configuration</h5>
-                </div>
-                <div class="card-body">
+                    <div class="card-body">
 
-                <div class="form-section active" id="encryptedGuidedSection">
-                    <div class="form-group">
-                        <label class="form-label">Database Type:</label>
-                        <div class="db-type-selector">
-                            <div class="db-type-option" data-type="mysql" data-prefix="encrypted">
-                                <input type="radio" name="encrypted_db_type" value="mysql" id="encrypted_mysql">
-                                <i class="bi bi-database db-icon"></i>
-                                <div class="db-name">MySQL</div>
-                            </div>
-                            <div class="db-type-option" data-type="postgresql" data-prefix="encrypted">
+                        <div class="form-section active" id="encryptedGuidedSection">
+                            <div class="form-group">
+                                <label class="form-label">Database Type:</label>
+                                <div class="db-type-selector">
+                                    <div class="db-type-option" data-type="mysql" data-prefix="encrypted">
+                                        <input type="radio" name="encrypted_db_type" value="mysql" id="encrypted_mysql">
+                                        <i class="bi bi-database db-icon"></i>
+                                        <div class="db-name">MySQL</div>
+                                    </div>
+                                    <!-- <div class="db-type-option" data-type="postgresql" data-prefix="encrypted">
                                 <input type="radio" name="encrypted_db_type" value="postgresql"
                                     id="encrypted_postgresql">
                                 <i class="bi bi-server db-icon"></i>
@@ -273,217 +273,239 @@
                                 <input type="radio" name="encrypted_db_type" value="redis" id="encrypted_redis">
                                 <i class="bi bi-lightning db-icon"></i>
                                 <div class="db-name">Redis</div>
+                            </div> 
+                                    <div class="db-type-option" data-type="cassandra" data-prefix="encrypted">
+                                        <input type="radio" name="encrypted_db_type" value="cassandra"
+                                            id="encrypted_cassandra">
+                                        <i class="bi bi-pentagon db-icon"></i>
+                                        <div class="db-name">Cassandra</div>
+                                    </div>-->
+                                </div>
                             </div>
-                            <div class="db-type-option" data-type="cassandra" data-prefix="encrypted">
-                                <input type="radio" name="encrypted_db_type" value="cassandra" id="encrypted_cassandra">
-                                <i class="bi bi-pentagon db-icon"></i>
-                                <div class="db-name">Cassandra</div>
+
+                            <div class="connection-grid">
+                                <div class="form-group">
+                                    <label class="form-label" for="encrypted_host">Host:</label>
+                                    <input type="text" class="form-control" name="encrypted_host" id="encrypted_host"
+                                        placeholder="localhost" value="localhost">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="encrypted_port">Port:</label>
+                                    <input type="text" class="form-control" name="encrypted_port" id="encrypted_port"
+                                        placeholder="3306">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="encrypted_username">Username:</label>
+                                    <input type="text" class="form-control" name="encrypted_username"
+                                        id="encrypted_username" placeholder="username">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="encrypted_password">Password:</label>
+                                    <input type="password" class="form-control" name="encrypted_password"
+                                        id="encrypted_password" placeholder="password">
+                                </div>
+                                <div class="form-group" style="grid-column: 1 / -1;">
+                                    <label class="form-label" for="encrypted_database">Database Name:</label>
+                                    <input type="text" class="form-control" name="encrypted_database"
+                                        id="encrypted_database" placeholder="encrypted_database">
+                                </div>
+                            </div>
+
+                            <div class="url-preview" id="encryptedUrlPreview">
+                                <div class="url-preview-label">Generated Connection URL:</div>
+                                <span id="encryptedUrlText">Configure database settings to see preview</span>
+                            </div>
+                        </div>
+
+                        <div class="form-section" id="encryptedManualSection">
+                            <div class="form-group">
+                                <label class="form-label" for="encrypted_url">Encrypted Database URL:</label>
+                                <input type="text" class="form-control" name="encrypted_url" id="encrypted_url"
+                                    placeholder="mysql://user:password@localhost:3306/encrypted_db">
+                                <div class="input-help">Enter the complete connection URL for your encrypted
+                                    database
+                                </div>
+                                <div class="connection-examples">
+                                    <strong>Connection URL Examples:</strong><br>
+                                    MySQL: mysql://user:password@localhost:3306/database<br>
+                                    <!-- PostgreSQL: postgresql://user:password@localhost:5432/database<br>
+                                            SQLite: sqlite:///path/to/database.db<br>
+                                            MongoDB: mongodb://user:password@localhost:27017/database<br>
+                                            Oracle: oracle://user:password@localhost:1521/database<br>
+                                            SQL Server: mssql://user:password@localhost:1433/database<br>
+                                            Redis: redis://:password@localhost:6379/0<br>
+                                            Cassandra: cassandra://user:password@localhost:9042/keyspace-->
+                                </div>
                             </div>
                         </div>
                     </div>
+                </div>
+                <!-- Encryption Password Configuration -->
+                <div class="detail-card">
+                    <div class="card-header">
+                        <h5><i class="bi bi-key me-2"></i>Encryption Password Configuration</h5>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted" style="font-size: 12px; margin-bottom: 20px;">
+                            Set a strong encryption password to secure your data. This password will be used to
+                            encrypt
+                            all
+                            sensitive data in your database.
+                            <strong>Important:</strong> Store this password securely - you'll need it to decrypt
+                            your
+                            data.
+                        </p>
 
-                    <div class="connection-grid">
+                        <div class="alert alert-info"
+                            style="background: #d1ecf1; border: 1px solid #17a2b8; border-radius: 6px; padding: 12px; margin-bottom: 20px; font-size: 12px;">
+                            <div style="display: flex; align-items: start; gap: 12px;">
+                                <i class="bi bi-info-circle-fill" style="color: #0c5460; font-size: 16px;"></i>
+                                <div style="color: #0c5460;">
+                                    <strong>Optional Field:</strong> If you don't set a password here, the
+                                    system will:
+                                    <ol style="margin: 8px 0 0 20px; padding: 0;">
+                                        <li>Use your existing password from configuration (if available), OR
+                                        </li>
+                                        <li>Auto-generate a secure random password for you</li>
+                                    </ol>
+                                    <strong>Recommended:</strong> Set your own password for better control and
+                                    security.
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="form-group">
-                            <label class="form-label" for="encrypted_host">Host:</label>
-                            <input type="text" class="form-control" name="encrypted_host" id="encrypted_host"
-                                placeholder="localhost" value="localhost">
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" for="encrypted_port">Port:</label>
-                            <input type="text" class="form-control" name="encrypted_port" id="encrypted_port"
-                                placeholder="3306">
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" for="encrypted_username">Username:</label>
-                            <input type="text" class="form-control" name="encrypted_username" id="encrypted_username"
-                                placeholder="username">
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" for="encrypted_password">Password:</label>
-                            <input type="password" class="form-control" name="encrypted_password"
-                                id="encrypted_password" placeholder="password">
-                        </div>
-                        <div class="form-group" style="grid-column: 1 / -1;">
-                            <label class="form-label" for="encrypted_database">Database Name:</label>
-                            <input type="text" class="form-control" name="encrypted_database" id="encrypted_database"
-                                placeholder="encrypted_database">
-                        </div>
-                    </div>
-
-                    <div class="url-preview" id="encryptedUrlPreview">
-                        <div class="url-preview-label">Generated Connection URL:</div>
-                        <span id="encryptedUrlText">Configure database settings to see preview</span>
-                    </div>
-                </div>
-
-                <div class="form-section" id="encryptedManualSection">
-                    <div class="form-group">
-                        <label class="form-label" for="encrypted_url">Encrypted Database URL:</label>
-                        <input type="text" class="form-control" name="encrypted_url" id="encrypted_url"
-                            placeholder="mysql://user:password@localhost:3306/encrypted_db">
-                        <div class="input-help">Enter the complete connection URL for your encrypted database</div>
-                        <div class="connection-examples">
-                            <strong>Connection URL Examples:</strong><br>
-                            MySQL: mysql://user:password@localhost:3306/database<br>
-                            PostgreSQL: postgresql://user:password@localhost:5432/database<br>
-                            SQLite: sqlite:///path/to/database.db<br>
-                            MongoDB: mongodb://user:password@localhost:27017/database<br>
-                            Oracle: oracle://user:password@localhost:1521/database<br>
-                            SQL Server: mssql://user:password@localhost:1433/database<br>
-                            Redis: redis://:password@localhost:6379/0<br>
-                            Cassandra: cassandra://user:password@localhost:9042/keyspace
-                        </div>
-                    </div>
-                </div>
-               </div>
-            </div>
-               <!-- Encryption Password Configuration -->
-               <div class="detail-card">
-                <div class="card-header">
-                    <h5><i class="bi bi-key me-2"></i>Encryption Password Configuration</h5>
-                </div>
-                <div class="card-body">
-                <p class="text-muted" style="font-size: 12px; margin-bottom: 20px;">
-                    Set a strong encryption password to secure your data. This password will be used to encrypt all
-                    sensitive data in your database.
-                    <strong>Important:</strong> Store this password securely - you'll need it to decrypt your data.
-                </p>
-
-                <div class="alert alert-info"
-                    style="background: #d1ecf1; border: 1px solid #17a2b8; border-radius: 6px; padding: 12px; margin-bottom: 20px; font-size: 12px;">
-                    <div style="display: flex; align-items: start; gap: 12px;">
-                        <i class="bi bi-info-circle-fill" style="color: #0c5460; font-size: 16px;"></i>
-                        <div style="color: #0c5460;">
-                            <strong>Optional Field:</strong> If you don't set a password here, the system will:
-                            <ol style="margin: 8px 0 0 20px; padding: 0;">
-                                <li>Use your existing password from configuration (if available), OR</li>
-                                <li>Auto-generate a secure random password for you</li>
-                            </ol>
-                            <strong>Recommended:</strong> Set your own password for better control and security.
-                        </div>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label" for="encryption_password">
-                        <i class="bi bi-shield-lock me-1"></i>Encryption Password (Optional):
-                    </label>
-                    <div style="position: relative;">
-                        <input type="password" class="form-control" name="encryption_password" id="encryption_password"
-                            placeholder="Enter a strong encryption password (or leave empty for auto-generation)"
-                            oninput="checkPasswordStrength()">
-                        <button type="button" class="btn-toggle-password"
-                            onclick="togglePasswordVisibility('encryption_password')"
-                            style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; color: #666;">
-                            <i class="bi bi-eye" id="encryption_password_icon"></i>
-                        </button>
-                    </div>
-                    <div class="input-help">
-                        Password must be at least 12 characters long and include uppercase, lowercase, numbers, and
-                        special characters
-                    </div>
-
-                    <!-- Password Strength Indicator -->
-                    <div class="password-strength-container" style="margin-top: 12px; display: none;"
-                        id="passwordStrengthContainer">
-                        <div class="password-strength-label"
-                            style="font-size: 11px; font-weight: 600; margin-bottom: 6px; display: flex; justify-content: space-between;">
-                            <span>Password Strength:</span>
-                            <span id="strengthText" style="color: #dc3545;">Weak</span>
-                        </div>
-                        <div class="password-strength-bar"
-                            style="height: 6px; background: var(--border-color); border-radius: 3px; overflow: hidden;">
-                            <div id="strengthBar"
-                                style="height: 100%; width: 0%; background: #dc3545; transition: all 0.3s;"></div>
-                        </div>
-                        <div id="passwordRequirements" style="margin-top: 8px; font-size: 11px;">
-                            <div class="requirement" id="req_length" style="color: #dc3545;">
-                                <i class="bi bi-x-circle"></i> At least 12 characters
+                            <label class="form-label" for="encryption_password">
+                                <i class="bi bi-shield-lock me-1"></i>Encryption Password (Optional):
+                            </label>
+                            <div style="position: relative;">
+                                <input type="password" class="form-control" name="encryption_password"
+                                    id="encryption_password"
+                                    placeholder="Enter a strong encryption password (or leave empty for auto-generation)"
+                                    oninput="checkPasswordStrength()">
+                                <button type="button" class="btn-toggle-password"
+                                    onclick="togglePasswordVisibility('encryption_password')"
+                                    style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; color: #666;">
+                                    <i class="bi bi-eye" id="encryption_password_icon"></i>
+                                </button>
                             </div>
-                            <div class="requirement" id="req_uppercase" style="color: #dc3545;">
-                                <i class="bi bi-x-circle"></i> One uppercase letter
+                            <div class="input-help">
+                                Password must be at least 12 characters long and include uppercase, lowercase,
+                                numbers,
+                                and
+                                special characters
                             </div>
-                            <div class="requirement" id="req_lowercase" style="color: #dc3545;">
-                                <i class="bi bi-x-circle"></i> One lowercase letter
-                            </div>
-                            <div class="requirement" id="req_number" style="color: #dc3545;">
-                                <i class="bi bi-x-circle"></i> One number
-                            </div>
-                            <div class="requirement" id="req_special" style="color: #dc3545;">
-                                <i class="bi bi-x-circle"></i> One special character (!@#$%^&*)
+
+                            <!-- Password Strength Indicator -->
+                            <div class="password-strength-container" style="margin-top: 12px; display: none;"
+                                id="passwordStrengthContainer">
+                                <div class="password-strength-label"
+                                    style="font-size: 11px; font-weight: 600; margin-bottom: 6px; display: flex; justify-content: space-between;">
+                                    <span>Password Strength:</span>
+                                    <span id="strengthText" style="color: #dc3545;">Weak</span>
+                                </div>
+                                <div class="password-strength-bar"
+                                    style="height: 6px; background: var(--border-color); border-radius: 3px; overflow: hidden;">
+                                    <div id="strengthBar"
+                                        style="height: 100%; width: 0%; background: #dc3545; transition: all 0.3s;">
+                                    </div>
+                                </div>
+                                <div id="passwordRequirements" style="margin-top: 8px; font-size: 11px;">
+                                    <div class="requirement" id="req_length" style="color: #dc3545;">
+                                        <i class="bi bi-x-circle"></i> At least 12 characters
+                                    </div>
+                                    <div class="requirement" id="req_uppercase" style="color: #dc3545;">
+                                        <i class="bi bi-x-circle"></i> One uppercase letter
+                                    </div>
+                                    <div class="requirement" id="req_lowercase" style="color: #dc3545;">
+                                        <i class="bi bi-x-circle"></i> One lowercase letter
+                                    </div>
+                                    <div class="requirement" id="req_number" style="color: #dc3545;">
+                                        <i class="bi bi-x-circle"></i> One number
+                                    </div>
+                                    <div class="requirement" id="req_special" style="color: #dc3545;">
+                                        <i class="bi bi-x-circle"></i> One special character (!@#$%^&*)
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label class="form-label" for="encryption_password_confirm">
+                                        <i class="bi bi-shield-check me-1"></i>Confirm Encryption Password
+                                        (Optional):
+                                    </label>
+                                    <div style="position: relative;">
+                                        <input type="password" class="form-control" name="encryption_password_confirm"
+                                            id="encryption_password_confirm"
+                                            placeholder="Re-enter your encryption password (if provided above)"
+                                            oninput="checkPasswordMatch()">
+                                        <button type="button" class="btn-toggle-password"
+                                            onclick="togglePasswordVisibility('encryption_password_confirm')"
+                                            style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; color: #666;">
+                                            <i class="bi bi-eye" id="encryption_password_confirm_icon"></i>
+                                        </button>
+                                    </div>
+                                    <div id="passwordMatchMessage"
+                                        style="font-size: 11px; margin-top: 4px; display: none;"></div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label class="form-label" for="security_level">
+                                        <i class="bi bi-shield-fill-check me-1"></i>Security Level:
+                                    </label>
+                                    <select class="form-control" name="security_level" id="security_level">
+                                        <option value="Min">Minimum (Faster, Less Secure)</option>
+                                        <option value="Medium" selected>Medium (Balanced)</option>
+                                        <option value="Max">Maximum (Slower, Most Secure)</option>
+                                    </select>
+                                    <div class="input-help">
+                                        Higher security levels provide stronger encryption but may impact
+                                        performance
+                                    </div>
+                                </div>
+
+                                <!-- Security Notice -->
+                                <div class="alert alert-warning"
+                                    style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; padding: 16px; margin-top: 20px; font-size: 12px;">
+                                    <div style="display: flex; align-items: start; gap: 12px;">
+                                        <i class="bi bi-exclamation-triangle-fill"
+                                            style="color: #856404; font-size: 20px;"></i>
+                                        <div>
+                                            <strong style="color: #856404; display: block; margin-bottom: 6px;">Security
+                                                Notice:</strong>
+                                            <ul style="margin: 0; padding-left: 20px; color: #856404;">
+                                                <li>Your encryption password is <strong>NOT</strong> stored
+                                                    anywhere in
+                                                    the system</li>
+                                                <li>If you lose this password, your encrypted data
+                                                    <strong>CANNOT</strong> be recovered
+                                                </li>
+                                                <li>Store this password in a secure password manager</li>
+                                                <li>Never share this password with anyone</li>
+                                                <li>Consider backing up this password in a secure location</li>
+                                            </ul>
+                                            </li>
+                                            </ol>
+
+                                        </div>
+                                    </div>
+
+
+                                </div>
                             </div>
                         </div>
-
-                 <div class="form-group">
-                    <label class="form-label" for="encryption_password_confirm">
-                        <i class="bi bi-shield-check me-1"></i>Confirm Encryption Password (Optional):
-                    </label>
-                    <div style="position: relative;">
-                        <input type="password" class="form-control" name="encryption_password_confirm"
-                            id="encryption_password_confirm"
-                            placeholder="Re-enter your encryption password (if provided above)"
-                            oninput="checkPasswordMatch()">
-                        <button type="button" class="btn-toggle-password"
-                            onclick="togglePasswordVisibility('encryption_password_confirm')"
-                            style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; color: #666;">
-                            <i class="bi bi-eye" id="encryption_password_confirm_icon"></i>
-                        </button>
-                    </div>
-                    <div id="passwordMatchMessage" style="font-size: 11px; margin-top: 4px; display: none;"></div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label" for="security_level">
-                        <i class="bi bi-shield-fill-check me-1"></i>Security Level:
-                    </label>
-                    <select class="form-control" name="security_level" id="security_level">
-                        <option value="Min">Minimum (Faster, Less Secure)</option>
-                        <option value="Medium" selected>Medium (Balanced)</option>
-                        <option value="Max">Maximum (Slower, Most Secure)</option>
-                    </select>
-                    <div class="input-help">
-                        Higher security levels provide stronger encryption but may impact performance
                     </div>
                 </div>
-
-                <!-- Security Notice -->
-                <div class="alert alert-warning"
-                    style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; padding: 16px; margin-top: 20px; font-size: 12px;">
-                    <div style="display: flex; align-items: start; gap: 12px;">
-                        <i class="bi bi-exclamation-triangle-fill" style="color: #856404; font-size: 20px;"></i>
-                        <div>
-                            <strong style="color: #856404; display: block; margin-bottom: 6px;">Security
-                                Notice:</strong>
-                            <ul style="margin: 0; padding-left: 20px; color: #856404;">
-                                <li>Your encryption password is <strong>NOT</strong> stored anywhere in the system</li>
-                                <li>If you lose this password, your encrypted data <strong>CANNOT</strong> be recovered
-                                </li>
-                                <li>Store this password in a secure password manager</li>
-                                <li>Never share this password with anyone</li>
-                                <li>Consider backing up this password in a secure location</li>
-                            </ul>
-                        </li>
-                    </ol>
-           
-                        </div>
-                    </div>
-        
-        
-                    </div>
-                    </div>
-                    </div></div>
-           </div>
         </form>
-        
-<div class="action-buttons">
-                <button type="submit" class="btn btn-primary" id="submitBtn">
-                    <i class="bi bi-arrow-right me-2"></i>Continue to Table Selection
-                </button>
-                <a href="/dashboard" class="btn btn-outline-secondary">
-                    <i class="bi bi-arrow-left me-2"></i>Back to Dashboard
-                </a>
+
+        <div class="action-buttons">
+            <button type="submit" class="btn btn-primary" id="submitBtn">
+                <i class="bi bi-arrow-right me-2"></i>Continue to Table Selection
+            </button>
+            <a href="/dashboard" class="btn btn-outline-secondary">
+                <i class="bi bi-arrow-left me-2"></i>Back to Dashboard
+            </a>
         </div>
-        
+
     </div>
 
 

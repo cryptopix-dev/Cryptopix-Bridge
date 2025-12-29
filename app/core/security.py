@@ -5,9 +5,16 @@ Provides audit logging functionality
 
 import logging
 from typing import Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
+
+# IST Timezone (UTC+5:30)
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def get_ist_now():
+    """Get current time in IST timezone"""
+    return datetime.now(IST)
 
 class AuditLogger:
     """Simple audit logger"""
@@ -22,7 +29,7 @@ class AuditLogger:
                        ip_address: Optional[str] = None):
         """Log audit event"""
         log_entry = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": get_ist_now().isoformat(),
             "event_type": event_type,
             "user_id": user_id,
             "resource": resource,
