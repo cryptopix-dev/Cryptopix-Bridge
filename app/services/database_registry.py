@@ -7,11 +7,18 @@ import json
 import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import logging
 import uuid
 
 logger = logging.getLogger(__name__)
+
+# IST Timezone (UTC+5:30)
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def get_ist_now():
+    """Get current time in IST timezone"""
+    return datetime.now(IST)
 
 
 class DatabaseRegistry:
@@ -118,8 +125,8 @@ class DatabaseRegistry:
                     "source_db_url": source_db_url,
                     "encrypted_db_url": encrypted_db_url,
                     "schema_folder": schema_folder,
-                    "created_at": datetime.utcnow().isoformat(),
-                    "updated_at": datetime.utcnow().isoformat(),
+                    "created_at": get_ist_now().isoformat(),
+                    "updated_at": get_ist_now().isoformat(),
                     "migration_complete": False,
                     "vds_instances": []
                 }
@@ -206,7 +213,7 @@ class DatabaseRegistry:
                                 db[key] = value
                         
                         # Update timestamp
-                        db["updated_at"] = datetime.utcnow().isoformat()
+                        db["updated_at"] = get_ist_now().isoformat()
                         
                         registry["databases"][i] = db
                         self._write_registry(registry)
@@ -293,13 +300,13 @@ class DatabaseRegistry:
                             "port": port,
                             "protocol": protocol,
                             "status": "stopped",
-                            "created_at": datetime.utcnow().isoformat(),
+                            "created_at": get_ist_now().isoformat(),
                             "last_started": None,
                             "last_stopped": None
                         }
                         
                         db["vds_instances"].append(vds_instance)
-                        db["updated_at"] = datetime.utcnow().isoformat()
+                        db["updated_at"] = get_ist_now().isoformat()
                         
                         self._write_registry(registry)
                         
@@ -336,11 +343,11 @@ class DatabaseRegistry:
                                 vds["status"] = status
                                 
                                 if status == "running":
-                                    vds["last_started"] = datetime.utcnow().isoformat()
+                                    vds["last_started"] = get_ist_now().isoformat()
                                 elif status == "stopped":
-                                    vds["last_stopped"] = datetime.utcnow().isoformat()
+                                    vds["last_stopped"] = get_ist_now().isoformat()
                                 
-                                db["updated_at"] = datetime.utcnow().isoformat()
+                                db["updated_at"] = get_ist_now().isoformat()
                                 self._write_registry(registry)
                                 
                                 logger.info(f"Updated VDS {vds_id} status to {status}")
@@ -373,7 +380,7 @@ class DatabaseRegistry:
                         for i, vds in enumerate(db["vds_instances"]):
                             if vds["id"] == vds_id:
                                 db["vds_instances"].pop(i)
-                                db["updated_at"] = datetime.utcnow().isoformat()
+                                db["updated_at"] = get_ist_now().isoformat()
                                 self._write_registry(registry)
                                 
                                 logger.info(f"Removed VDS instance {vds_id} from database {db_id}")

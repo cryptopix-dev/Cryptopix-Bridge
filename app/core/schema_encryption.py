@@ -507,9 +507,10 @@ class SchemaEncryptionService:
         return list(set(synonyms))  # Remove duplicates
 
     def _get_timestamp(self) -> str:
-        """Get current timestamp"""
-        from datetime import datetime
-        return datetime.utcnow().isoformat()
+        """Get current timestamp in IST"""
+        from datetime import datetime, timezone, timedelta
+        IST = timezone(timedelta(hours=5, minutes=30))
+        return datetime.now(IST).isoformat()
 
     def save_encrypted_schema(self, encrypted_schema: EncryptedSchema, file_path: str):
         """Save encrypted schema to file"""

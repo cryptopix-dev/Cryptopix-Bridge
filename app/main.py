@@ -31,9 +31,18 @@ from app.services.database_registry import database_registry
 from app.services.vds_manager import vds_manager
 import logging
 import datetime
+from datetime import timezone, timedelta
+
 logger = logging.getLogger(__name__)
 
-# Configure logging
+# IST Timezone (UTC+5:30)
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def get_ist_now():
+    """Get current time in IST timezone"""
+    return datetime.datetime.now(IST)
+
+# Configure logging with IST timezone
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -43,6 +52,17 @@ logging.basicConfig(
 app = Flask(__name__, template_folder='../templates',
             static_folder='../static')
 app.secret_key = settings.SECRET_KEY
+
+# Configure session to be permanent and last for 30 days
+app.config['PERMANENT_SESSION_LIFETIME'] = datetime.timedelta(days=30)
+app.config['SESSION_COOKIE_SECURE'] = False  # Set to True if using HTTPS
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
+@app.context_processor
+def inject_config():
+    return dict(license_server_url=settings.LICENSE_SERVER_URL)
+
 
 # Increase max content length to handle large database schemas (100MB)
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB
@@ -373,7 +393,7 @@ def init_system_logs_table():
 def cleanup_old_logs():
     """Clean up old logs from database based on retention policy"""
     try:
-        cutoff_date = (datetime.datetime.utcnow() -
+        cutoff_date = (get_ist_now() -
                        datetime.timedelta(days=LOG_RETENTION_DAYS)).isoformat()
 
         conn = sqlite3.connect('system_logs.db')
@@ -402,7 +422,7 @@ def log_system_event(level, message, source="system", user_id=None, session_id=N
     """Log a system event to both memory and database with memory management"""
     from flask import has_request_context
 
-    timestamp = datetime.datetime.utcnow().isoformat()
+    timestamp = get_ist_now().isoformat()
 
     # Handle request context safely
     if has_request_context():
@@ -462,11 +482,150 @@ def log_system_event(level, message, source="system", user_id=None, session_id=N
         threading.Thread(target=cleanup_old_logs, daemon=True).start()
 
 
+# Global variable to store license key and email for background tasks
+_current_license_key = None
+_current_user_email = None
+
+
+def send_metrics():
+    """Send database metrics to license server for ALL registered databases"""
+    try:
+        from app.utils.metrics_helper import get_database_size
+        
+        # Get global credentials
+        global _current_license_key, _current_user_email
+        
+        if not _current_license_key or not _current_user_email:
+            # Try to get from settings as fallback
+            if not _current_license_key and hasattr(settings, 'LICENSE_KEY'):
+                _current_license_key = settings.LICENSE_KEY
+                
+            if not _current_license_key:
+                # Silent return to avoid log spam if just not logged in
+                return
+
+        # Prepare payload
+        payload = {
+            "user_email": _current_user_email or "unknown@example.com",
+            "license_key": _current_license_key,
+            "timestamp": get_ist_now().isoformat(),
+            "databases": []
+        }
+
+        # Iterate over all registered databases
+        databases = database_registry.list_databases()
+        
+        # If no databases in registry but migration state exists, try to use that (fallback)
+        if not databases:
+            migration_state = load_migration_state_from_files()
+            if migration_state.get("source_db_url"):
+                # Construct a temporary db object from migration state
+                db_name = "unknown_db"
+                if "sqlite" in migration_state["source_db_url"]:
+                    db_name = migration_state["source_db_url"].split("/")[-1].split(".")[0]
+                
+                databases = [{
+                    "id": migration_state.get("db_id", "temp_id"),
+                    "name": db_name,
+                    "source_db_url": migration_state.get("source_db_url"),
+                    "encrypted_db_url": migration_state.get("encrypted_db_url"),
+                    "migration_complete": migration_state.get("migration_complete", False)
+                }]
+
+        for db in databases:
+            try:
+                # Get source database size
+                source_size = get_database_size(db.get('source_db_url', ''))
+                
+                # Get encrypted database size
+                encrypted_size = get_database_size(db.get('encrypted_db_url', ''))
+                
+                # Calculate compression ratio
+                compression_ratio = 1.0
+                if source_size['size_bytes'] > 0:
+                    compression_ratio = encrypted_size['size_bytes'] / source_size['size_bytes']
+                elif encrypted_size['size_bytes'] > 0:
+                    compression_ratio = 0.0 # Compressed from nothing? undefined but 0 is safe
+                
+                # Get VDS instances info
+                vds_instances = []
+                if 'id' in db:
+                    try:
+                        db_vds_list = vds_manager.list_vds_instances(db['id'])
+                        for vds in db_vds_list:
+                            # Basic VDS info
+                            vds_instances.append({
+                                "vds_id": vds.get('id'),
+                                "status": vds.get('status', 'stopped')
+                            })
+                    except Exception as vds_e:
+                        logger.warning(f"Failed to get VDS info for db {db.get('name')}: {vds_e}")
+
+                db_entry = {
+                    "database_name": db.get('name', 'Unknown'),
+                    "database_id": db.get('id', 'unknown'),
+                    
+                    "source_size_bytes": source_size['size_bytes'],
+                    "source_size_mb": source_size['size_mb'],
+                    "source_size_gb": source_size['size_gb'],
+                    
+                    "encrypted_size_bytes": encrypted_size['size_bytes'],
+                    "encrypted_size_mb": encrypted_size['size_mb'],
+                    "encrypted_size_gb": encrypted_size['size_gb'],
+                    
+                    "compression_ratio": round(compression_ratio, 4),
+                    "size_increase_percent": round((compression_ratio - 1) * 100, 2) if compression_ratio > 0 else 0,
+                    "migration_complete": db.get('migration_complete', False),
+                    
+                    "vds_count": len(vds_instances),
+                    "vds_instances": vds_instances
+                }
+                payload["databases"].append(db_entry)
+            except Exception as db_e:
+                logger.error(f"Error processing metrics for database {db.get('name')}: {db_e}")
+                continue
+        
+        # Send to license server
+        base_url = settings.LICENSE_SERVER_URL.rstrip('/')
+        target_url = f"{base_url}/api/metrics/database"
+        
+        try:
+            logger.debug(f"Sending metrics for {len(payload['databases'])} databases to: {target_url}")
+            
+            response = requests.post(
+                target_url,
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {_current_license_key}'
+                },
+                json=payload,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                logger.info("Metrics sent successfully to license server")
+            else:
+                resp_preview = response.text[:200] + "..." if len(response.text) > 200 else response.text
+                logger.warning(f"Failed to send metrics to {target_url}: {response.status_code} - {resp_preview}")
+                
+        except Exception as e:
+            logger.error(f"Error sending metrics request to {target_url}: {e}")
+
+    except Exception as e:
+        logger.error(f"Error gathering/sending metrics: {e}")
+
+
 def start_system_monitor():
-    """Background thread to monitor critical system conditions only"""
+    """Background thread to monitor critical system conditions and send metrics"""
     def monitor_application():
+        last_metrics_time = 0
+        METRICS_INTERVAL = 10  # Send metrics every 10 seconds for real-time updates
+
         while True:
             try:
+                current_time = time.time()
+                
+                # 1. System Resource Monitoring
                 # Only monitor for critical system conditions that require immediate attention
                 if PSUTIL_AVAILABLE and psutil:
                     memory = psutil.virtual_memory()
@@ -499,11 +658,16 @@ def start_system_monitor():
                         log_system_event(
                             'WARNING', f'High disk usage: {disk_percent:.1f}% - Disk space critically low', source='system_monitor')
 
+                # 2. Send Metrics
+                if current_time - last_metrics_time > METRICS_INTERVAL:
+                    send_metrics()
+                    last_metrics_time = current_time
+
             except Exception as e:
                 logger.error(f"Error in system monitor: {e}")
 
-            # Check every 10 minutes (reduced frequency for critical monitoring only)
-            time.sleep(600)
+            # Check every minute
+            time.sleep(60)
 
     thread = threading.Thread(target=monitor_application, daemon=True)
     thread.start()
@@ -519,25 +683,33 @@ start_system_monitor()
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if 'license_token' not in session:
+        # Check if user has a valid session
+        if 'license_token' not in session or 'user_email' not in session:
+            flash('Please login to access this page.')
             return redirect(url_for('login'))
-
-        # Validate token on each request
-        if not validate_token_on_load():
-            flash('Your session has expired. Please login again.')
-            return redirect(url_for('login'))
-
+        
+        # Session exists, allow access without validating token on every request
+        # This prevents automatic logouts due to network issues or server downtime
         return f(*args, **kwargs)
     return decorated_function
 
 # Authentication functions
 
 
+def get_api_base_url():
+    """Construct API base URL handling potential configuration discrepancies"""
+    base = settings.LICENSE_SERVER_URL.rstrip('/')
+    # If the URL already ends with /api/bridge, don't append it again
+    if base.endswith('/api/bridge'):
+        return base
+    return f"{base}/api/bridge"
+
+
 def authenticate_user(email: str, license_key: str) -> dict:
     """Authenticate user with license server"""
     try:
         response = requests.post(
-            f"{settings.LICENSE_SERVER_URL}/login",
+            f"{get_api_base_url()}/login",
             headers={'Content-Type': 'application/json'},
             json={
                 'email': email,
@@ -562,7 +734,7 @@ def validate_license(license_key: str) -> dict:
     """Validate license with server"""
     try:
         response = requests.post(
-            f"{settings.LICENSE_SERVER_URL}/validate",
+            f"{get_api_base_url()}/validate",
             headers={'Content-Type': 'application/json'},
             json={'license_key': license_key}
         )
@@ -583,7 +755,7 @@ def validate_token_on_load():
         try:
             token = session['license_token']
             response = requests.get(
-                f"{settings.LICENSE_SERVER_URL}/me",
+                f"{get_api_base_url()}/me",
                 headers={
                     'Authorization': f'Bearer {token}'
                 }
@@ -604,6 +776,23 @@ def validate_token_on_load():
     return False
 
 
+@app.before_request
+def ensure_credentials_loaded():
+    """Ensure credentials are loaded into global variables from session if available"""
+    # Debug logging for session issues
+    logger.debug(f"Request to {request.path} | Method: {request.method}")
+    logger.debug(f"Session keys: {list(session.keys())}")
+    
+    global _current_license_key, _current_user_email
+    
+    if _current_license_key is None and 'license_key' in session:
+        _current_license_key = session['license_key']
+        logger.debug(f"Restored license key from session: {_current_license_key[:5]}...")
+        
+    if _current_user_email is None and 'user_email' in session:
+        _current_user_email = session['user_email']
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     """Login page"""
@@ -621,11 +810,26 @@ def login():
         auth_result = authenticate_user(email, license_key)
 
         if auth_result['success']:
+            # Make session permanent (will last for PERMANENT_SESSION_LIFETIME)
+            session.permanent = True
+            
             # Store token in session
             session['license_token'] = auth_result['token']
             session['user_email'] = email
             session['license_key'] = license_key
-            session['user_info'] = auth_result.get('user', {})
+            
+            # Minimize user_info in session to avoid cookie size limits (4KB)
+            full_user_info = auth_result.get('user', {})
+            safe_user_info = {
+                k: v for k, v in full_user_info.items() 
+                if k in ['name', 'username', 'full_name', 'display_name', 'email', 'id', 'role']
+            }
+            session['user_info'] = safe_user_info
+            
+            # Set global credentials for background tasks
+            global _current_license_key, _current_user_email
+            _current_license_key = license_key
+            _current_user_email = email
 
             log_system_event('INFO', f'User {email} logged in successfully',
                              source='authentication', user_id=email, ip_address=request.remote_addr)
@@ -1191,7 +1395,7 @@ def save_schema_and_mappings(source_db_url: str, table_configs: Dict[str, Any], 
             "database_url": source_db_url,
             "database_name": db_name,
             "tables": {},
-            "created_at": datetime.datetime.utcnow().isoformat()
+            "created_at": get_ist_now().isoformat()
         }
 
         # Get detailed column information from source database
@@ -1227,7 +1431,7 @@ def save_schema_and_mappings(source_db_url: str, table_configs: Dict[str, Any], 
             "database_url": source_db_url,
             "database_name": db_name,
             "table_mappings": {},
-            "created_at": datetime.datetime.utcnow().isoformat()
+            "created_at": get_ist_now().isoformat()
         }
 
         # Convert table configs to AI assistant format
@@ -1327,8 +1531,8 @@ def save_empty_database_schema(db_url: str, db_type: str, table_configs: Dict[st
             "database_name": db_name,
             "database_type": db_type,
             "tables": {},
-            "created_at": datetime.datetime.utcnow().isoformat(),
-            "migration_timestamp": datetime.datetime.utcnow().isoformat()
+            "created_at": get_ist_now().isoformat(),
+            "migration_timestamp": get_ist_now().isoformat()
         }
 
         for table_name in tables:
@@ -1500,7 +1704,7 @@ def start_migration():
                     'completed_tables': 0,
                     'message': 'Initializing migration...',
                     'error': None,
-                    'start_time': datetime.datetime.utcnow().isoformat(),
+                    'start_time': get_ist_now().isoformat(),
                     'end_time': None
                 })
 
@@ -1532,7 +1736,7 @@ def start_migration():
                     migration_progress.update({
                         'status': 'failed',
                         'error': f"Failed to create encrypted schema: {str(e)}",
-                        'end_time': datetime.datetime.utcnow().isoformat()
+                        'end_time': get_ist_now().isoformat()
                     })
                 log_system_event(
                     'ERROR', f'Failed to create encrypted schema: {str(e)}', source='migration')
@@ -1563,7 +1767,7 @@ def start_migration():
                     migration_progress.update({
                         'status': 'failed',
                         'error': migration_result.get("error", "Unknown error"),
-                        'end_time': datetime.datetime.utcnow().isoformat()
+                        'end_time': get_ist_now().isoformat()
                     })
                 log_system_event(
                     'ERROR', f'Data migration failed: {migration_result.get("error", "Unknown error")}', source='migration')
@@ -1601,7 +1805,7 @@ def start_migration():
                     'status': 'completed',
                     'progress': 100,
                     'message': 'Migration completed successfully!',
-                    'end_time': datetime.datetime.utcnow().isoformat()
+                    'end_time': get_ist_now().isoformat()
                 })
 
             # VDS auto-start disabled - users must manually start VDS from Settings page
@@ -1635,7 +1839,7 @@ def start_migration():
                 migration_progress.update({
                     'status': 'failed',
                     'error': str(e),
-                    'end_time': datetime.datetime.utcnow().isoformat()
+                    'end_time': get_ist_now().isoformat()
                 })
             log_system_event('ERROR', f'Migration failed: {str(e)}', source='migration', details={
                              'error': str(e)})
@@ -2642,21 +2846,38 @@ def migrate_data_with_progress(migration_state):
                                 col_config = config[col_name]
 
                                 if col_config['type'] == 'encrypt':
+                                    # Handle bytes values correctly to avoid "b'...'" string representation
+                                    processed_value = value
+                                    if isinstance(value, bytes):
+                                        try:
+                                            processed_value = value.decode('utf-8')
+                                        except UnicodeDecodeError:
+                                            # Fallback to latin-1 for arbitrary binary data
+                                            processed_value = value.decode('latin-1')
+
                                     # Encrypt individual value and store in original column name
                                     encrypted_blob = clwe_encryptor.encrypt_value(
-                                        value, settings.CRYPTOPIX_DEFAULT_PASSWORD)
+                                        processed_value, settings.CRYPTOPIX_DEFAULT_PASSWORD)
                                     enc_row_data[col_name] = encrypted_blob
 
                                     # Generate unified tag for searching and store in tag column
                                     str_value = str(
-                                        value) if value is not None else ''
+                                        processed_value) if processed_value is not None else ''
                                     unified_tag = clwe_encryptor.generate_unified_tag(
                                         str_value, col_config['data_type'])
                                     enc_row_data[f"tag_{col_name}"] = unified_tag
 
                                 else:  # normal
                                     # Normal column - store as-is
-                                    enc_row_data[col_name] = value
+                                    # Also handle bytes cleanup for normal columns if they are text
+                                    processed_value = value
+                                    if col_config.get('data_type') in ['TEXT', 'VARCHAR', 'CHAR'] and isinstance(value, bytes):
+                                        try:
+                                            processed_value = value.decode('utf-8')
+                                        except UnicodeDecodeError:
+                                            processed_value = value.decode('latin-1')
+                                    
+                                    enc_row_data[col_name] = processed_value
 
                         encrypted_batch.append(enc_row_data)
 
@@ -2781,18 +3002,26 @@ def migrate_data():
                                 col_config = config[col_name]
 
                                 if col_config['type'] == 'encrypt':
+                                    # Handle bytes values correctly
+                                    processed_value = value
+                                    if isinstance(value, bytes):
+                                        try:
+                                            processed_value = value.decode('utf-8')
+                                        except UnicodeDecodeError:
+                                            processed_value = value.decode('latin-1')
+
                                     # Encrypt individual value and store in original column name
                                     log_system_event(
                                         'DEBUG', f'Encrypting column {table_name}.{col_name} with value type {type(value)}', source='migration')
                                     encrypted_blob = clwe_encryptor.encrypt_value(
-                                        value, settings.CRYPTOPIX_DEFAULT_PASSWORD)
+                                        processed_value, settings.CRYPTOPIX_DEFAULT_PASSWORD)
                                     enc_row_data[col_name] = encrypted_blob
                                     log_system_event(
                                         'DEBUG', f'Encrypted {table_name}.{col_name} to binary data of size {len(encrypted_blob)} bytes', source='migration')
 
                                     # Generate unified tag for searching and store in tag column
                                     str_value = str(
-                                        value) if value is not None else ''
+                                        processed_value) if processed_value is not None else ''
                                     unified_tag = clwe_encryptor.generate_unified_tag(
                                         str_value, col_config['data_type'])
                                     enc_row_data[f"tag_{col_name}"] = unified_tag
@@ -2801,9 +3030,16 @@ def migrate_data():
 
                                 else:  # normal
                                     # Normal column - store as-is
+                                    processed_value = value
+                                    if col_config.get('data_type') in ['TEXT', 'VARCHAR', 'CHAR'] and isinstance(value, bytes):
+                                        try:
+                                            processed_value = value.decode('utf-8')
+                                        except UnicodeDecodeError:
+                                            processed_value = value.decode('latin-1')
+
                                     log_system_event(
                                         'DEBUG', f'Storing {table_name}.{col_name} as normal data (type: {col_config["type"]})', source='migration')
-                                    enc_row_data[col_name] = value
+                                    enc_row_data[col_name] = processed_value
 
                         encrypted_batch.append(enc_row_data)
 
@@ -4314,7 +4550,7 @@ def get_log_analytics(hours=24):
         cursor = conn.cursor()
 
         # Calculate time range
-        cutoff_time = (datetime.datetime.utcnow() -
+        cutoff_time = (get_ist_now() -
                        datetime.timedelta(hours=hours)).isoformat()
 
         analytics = {
@@ -4519,7 +4755,7 @@ def get_system_logs():
             params.extend([f"%{search}%", f"%{search}%"])
 
         if time_range:
-            hours_ago = datetime.datetime.utcnow() - datetime.timedelta(hours=int(time_range))
+            hours_ago = get_ist_now() - datetime.timedelta(hours=int(time_range))
             query += " AND timestamp >= ?"
             params.append(hours_ago.isoformat())
 
@@ -4867,7 +5103,7 @@ def download_logs_txt():
             params.append(f"%{source}%")
 
         if time_range:
-            hours_ago = datetime.datetime.utcnow() - datetime.timedelta(hours=int(time_range))
+            hours_ago = get_ist_now() - datetime.timedelta(hours=int(time_range))
             query += " AND timestamp >= ?"
             params.append(hours_ago.isoformat())
 
@@ -5440,6 +5676,166 @@ def api_running_vds():
         return json.dumps({"success": True, "running_instances": running}), 200, {'ContentType': 'application/json'}
     except Exception as e:
         logger.error(f"Failed to get running VDS instances: {e}")
+        return json.dumps({"success": False, "error": str(e)}), 500, {'ContentType': 'application/json'}
+
+
+@app.route('/api/vds/uptime/<db_id>/<vds_id>', methods=['GET'])
+@login_required
+def api_vds_uptime(db_id, vds_id):
+    """Get uptime for a specific VDS instance"""
+    try:
+        uptime_info = vds_manager.get_vds_uptime(db_id, vds_id)
+        if uptime_info:
+            return json.dumps({"success": True, "uptime": uptime_info}), 200, {'ContentType': 'application/json'}
+        else:
+            return json.dumps({"success": False, "error": "VDS instance not found"}), 404, {'ContentType': 'application/json'}
+    except Exception as e:
+        logger.error(f"Failed to get VDS uptime: {e}")
+        return json.dumps({"success": False, "error": str(e)}), 500, {'ContentType': 'application/json'}
+
+
+@app.route('/api/metrics/database-sizes', methods=['GET'])
+@login_required
+def api_get_database_sizes():
+    """Get size information for all databases"""
+    try:
+        from app.utils.metrics_helper import get_database_size
+        
+        databases = database_registry.list_databases()
+        database_sizes = []
+        
+        for db in databases:
+            # Get source database size
+            source_size = get_database_size(db.get('source_db_url', ''))
+            
+            # Get encrypted database size
+            encrypted_size = get_database_size(db.get('encrypted_db_url', ''))
+            
+            # Calculate compression ratio
+            if source_size['size_bytes'] > 0:
+                compression_ratio = encrypted_size['size_bytes'] / source_size['size_bytes']
+            else:
+                compression_ratio = 0
+            
+            database_sizes.append({
+                "database_id": db['id'],
+                "database_name": db['name'],
+                "source_database": {
+                    "size_bytes": source_size['size_bytes'],
+                    "size_formatted": source_size['size_formatted'],
+                    "size_mb": source_size['size_mb'],
+                    "size_gb": source_size['size_gb']
+                },
+                "encrypted_database": {
+                    "size_bytes": encrypted_size['size_bytes'],
+                    "size_formatted": encrypted_size['size_formatted'],
+                    "size_mb": encrypted_size['size_mb'],
+                    "size_gb": encrypted_size['size_gb']
+                },
+                "compression_ratio": round(compression_ratio, 4),
+                "size_increase_percent": round((compression_ratio - 1) * 100, 2) if compression_ratio > 0 else 0,
+                "created_at": db.get('created_at'),
+                "migration_complete": db.get('migration_complete', False)
+            })
+        
+        return json.dumps({
+            "success": True,
+            "databases": database_sizes,
+            "total_databases": len(database_sizes)
+        }), 200, {'ContentType': 'application/json'}
+        
+    except Exception as e:
+        logger.error(f"Failed to get database sizes: {e}")
+        return json.dumps({"success": False, "error": str(e)}), 500, {'ContentType': 'application/json'}
+
+
+@app.route('/api/metrics/send-to-license-server', methods=['POST'])
+@login_required
+def api_send_metrics_to_license_server():
+    """Send database size metrics to license server"""
+    try:
+        from app.utils.metrics_helper import get_database_size, send_metrics_to_license_server
+        
+        # Get license key from session
+        license_key = session.get('license_key')
+        if not license_key:
+            return json.dumps({"success": False, "error": "License key not found"}), 401, {'ContentType': 'application/json'}
+        
+        # Collect metrics for all databases
+        databases = database_registry.list_databases()
+        metrics_data = {
+            "user_email": session.get('user_email'),
+            "license_key": license_key,
+            "timestamp": get_ist_now().isoformat(),
+            "databases": []
+        }
+        
+        for db in databases:
+            # Get source database size
+            source_size = get_database_size(db.get('source_db_url', ''))
+            
+            # Get encrypted database size
+            encrypted_size = get_database_size(db.get('encrypted_db_url', ''))
+            
+            # Calculate compression ratio
+            if source_size['size_bytes'] > 0:
+                compression_ratio = encrypted_size['size_bytes'] / source_size['size_bytes']
+            else:
+                compression_ratio = 0
+            
+            # Get VDS instances info
+            vds_instances = []
+            for vds in db.get('vds_instances', []):
+                uptime_info = vds_manager.get_vds_uptime(db['id'], vds['id'])
+                vds_instances.append({
+                    "vds_id": vds['id'],
+                    "host": vds['host'],
+                    "port": vds['port'],
+                    "protocol": vds['protocol'],
+                    "status": vds['status'],
+                    "uptime": uptime_info
+                })
+            
+            metrics_data["databases"].append({
+                "database_name": db['name'],
+                "database_id": db['id'],
+                "source_size_bytes": source_size['size_bytes'],
+                "source_size_mb": source_size['size_mb'],
+                "source_size_gb": source_size['size_gb'],
+                "encrypted_size_bytes": encrypted_size['size_bytes'],
+                "encrypted_size_mb": encrypted_size['size_mb'],
+                "encrypted_size_gb": encrypted_size['size_gb'],
+                "compression_ratio": round(compression_ratio, 4),
+                "size_increase_percent": round((compression_ratio - 1) * 100, 2) if compression_ratio > 0 else 0,
+                "migration_complete": db.get('migration_complete', False),
+                "created_at": db.get('created_at'),
+                "updated_at": db.get('updated_at'),
+                "vds_instances": vds_instances,
+                "vds_count": len(vds_instances)
+            })
+        
+        # Send to license server
+        result = send_metrics_to_license_server(license_key, metrics_data)
+        
+        if result['success']:
+            log_system_event('INFO', f'Successfully sent metrics for {len(databases)} databases to license server', 
+                           source='metrics_reporting')
+            return json.dumps({
+                "success": True,
+                "message": "Metrics sent successfully",
+                "databases_reported": len(databases)
+            }), 200, {'ContentType': 'application/json'}
+        else:
+            log_system_event('WARNING', f'Failed to send metrics to license server: {result.get("error")}', 
+                           source='metrics_reporting')
+            return json.dumps({
+                "success": False,
+                "error": result.get('error', 'Unknown error')
+            }), 500, {'ContentType': 'application/json'}
+        
+    except Exception as e:
+        logger.error(f"Failed to send metrics to license server: {e}")
+        log_system_event('ERROR', f'Exception while sending metrics: {str(e)}', source='metrics_reporting')
         return json.dumps({"success": False, "error": str(e)}), 500, {'ContentType': 'application/json'}
 
 

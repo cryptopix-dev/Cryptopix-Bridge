@@ -56,7 +56,7 @@ class Settings:
 
 
         # License server settings
-        self.LICENSE_SERVER_URL = os.getenv("LICENSE_SERVER_URL", "https://your-license-server.com/api/bridge")
+        self.LICENSE_SERVER_URL = os.getenv("LICENSE_SERVER_URL", "https://your-license-server.com")
 
 # Global settings instance
 settings = Settings()
