@@ -888,9 +888,24 @@ class VDSInstance:
             
             # Build COM_STMT_PREPARE_OK response
             # Format: [header] status(0x00) stmt_id(4) num_columns(2) num_params(2) reserved(1) warning_count(2)
-            response = self._build_stmt_prepare_ok(stmt_id, num_params, sequence_number)
+            packets = [self._build_stmt_prepare_ok(stmt_id, num_params, sequence_number)]
+            sequence_number = (sequence_number + 1) % 256
             
-            return [response]
+            # If we have parameters, we MUST send parameter definition packets
+            if num_params > 0:
+                for i in range(num_params):
+                    # Send dummy parameter definition (standard practice)
+                    packets.append(self._build_mysql_column_definition_packet("?", sequence_number))
+                    sequence_number = (sequence_number + 1) % 256
+                
+                # Send EOF after params
+                packets.append(self._build_mysql_eof_packet(sequence_number))
+                sequence_number = (sequence_number + 1) % 256
+                
+            # Note: We currently send num_columns=0 in OK packet, so we don't send column definitions here.
+            # If we ever strictly determine output columns, we'd need to send them here too.
+            
+            return packets
             
         except Exception as e:
             logger.error(f"Error preparing statement: {e}")
@@ -937,10 +952,21 @@ class VDSInstance:
             final_sql = self._build_sql_from_template(sql_template, params)
             logger.info(f"Final SQL to execute: {final_sql[:200]}...")
             
-            # Execute the query using the normal query path (which handles encryption)
-            response_packets = self._process_mysql_query(final_sql, connection_id, sequence_number)
+            # Determine query type for separate handling (Binary vs OK)
+            query_type = self._analyze_query_type(final_sql)
             
-            return response_packets if response_packets else [self._build_mysql_error_packet("Query execution failed", sequence_number)]
+            # Execute query first
+            result = self._execute_query(final_sql, connection_id)
+            
+            if not result.get("success", False):
+                return [self._build_mysql_error_packet(result.get("error", "Unknown error"), sequence_number)]
+            
+            if query_type in ("SELECT", "SHOW", "EXPLAIN"):
+                # Return Binary Result Set (required for COM_STMT_EXECUTE)
+                return self._build_mysql_binary_result_set_packets(result, sequence_number)
+            else:
+                # Return OK Packet
+                return [self._build_mysql_ok_packet(sequence_number, result.get("affected_rows", 0))]
             
         except Exception as e:
             logger.error(f"Error executing prepared statement: {e}")
@@ -1412,7 +1438,7 @@ class VDSInstance:
             # Fixed fields: charset(2), length(4), type(1), flags(2), decimals(1), filler(2)
             fixed_fields = (
                 struct.pack('<H', 33) +      # charset utf8_general_ci
-                struct.pack('<I', 255) +     # max length
+                struct.pack('<I', 16777215) + # max length (16MB) - Fixed from 255
                 b'\xfd' +                     # VARCHAR type
                 struct.pack('<H', 0) +       # flags
                 b'\x00' +                     # decimals
@@ -1580,14 +1606,8 @@ class VDSInstance:
                     # Encode as UTF-8
                     encoded_value = str_value.encode('utf-8')
 
-                    # Length-encoded: 1 byte length + data (for lengths < 251)
-                    if len(encoded_value) < 251:
-                        packet += bytes([len(encoded_value)]) + encoded_value
-                    else:
-                        # For longer strings, we'd need proper length encoding
-                        # For now, truncate to avoid complexity
-                        truncated = encoded_value[:250]
-                        packet += bytes([len(truncated)]) + truncated
+                    # Length-encoded: proper encoding for any length
+                    packet += self._encode_length_encoded_int(len(encoded_value)) + encoded_value
 
             packet_length = len(packet)
             header = struct.pack('<I', packet_length)[
@@ -1602,6 +1622,119 @@ class VDSInstance:
             import traceback
             logger.error(traceback.format_exc())
             return b""
+
+    # BINARY PROTOCOL SUPPORT FOR PREPARED STATEMENTS
+    def _build_mysql_binary_result_set_packets(self, result: Dict[str, Any], start_sequence: int) -> List[bytes]:
+        """Build MySQL Binary Protocol result set packets (for Prepared Statements)"""
+        packets = []
+        sequence_number = start_sequence
+
+        try:
+            if not result.get("success", False):
+                return [self._build_mysql_error_packet(result.get("error", "Query failed"), sequence_number)]
+
+            if result.get("query_type") == "SELECT":
+                rows = result.get("rows", [])
+                columns = result.get("columns", [])
+                column_types = result.get("column_types", {})
+
+                if not columns:
+                    packets.append(self._build_mysql_ok_packet(sequence_number))
+                    return packets
+
+                # Column count packet
+                column_count_packet = self._build_mysql_column_count_packet(len(columns), sequence_number)
+                packets.append(column_count_packet)
+                sequence_number = (sequence_number + 1) % 256
+
+                # Column definition packets
+                for col_name in columns:
+                    col_type = column_types.get(col_name, 0xfd) # 0xfd = VARCHAR
+                    col_def_packet = self._build_mysql_column_definition_packet(col_name, sequence_number)
+                    packets.append(col_def_packet)
+                    sequence_number = (sequence_number + 1) % 256
+
+                # EOF packet after column definitions
+                eof_packet = self._build_mysql_eof_packet(sequence_number)
+                packets.append(eof_packet)
+                sequence_number = (sequence_number + 1) % 256
+
+                # Binary Data row packets
+                for row in rows:
+                    try:
+                        row_packet = self._build_mysql_binary_data_row_packet(row, columns, sequence_number)
+                        packets.append(row_packet)
+                        sequence_number = (sequence_number + 1) % 256
+                    except Exception as e:
+                        logger.error(f"Error building binary row: {e}")
+                        # Skip row or break? Skip for now.
+
+                # Final EOF packet
+                eof_packet = self._build_mysql_eof_packet(sequence_number)
+                packets.append(eof_packet)
+
+            else:
+                packets.append(self._build_mysql_ok_packet(sequence_number, result.get("affected_rows", 0)))
+
+        except Exception as e:
+            logger.error(f"Error building binary result set: {e}")
+            return [self._build_mysql_error_packet(str(e), start_sequence)]
+
+        return packets
+
+    def _build_mysql_binary_data_row_packet(self, row: Dict[str, Any], columns: List[str], sequence_number: int) -> bytes:
+        """
+        Build a Binary Protocol Data Row Packet.
+        Format:
+        - 1 byte: Packet Header (0x00)
+        - (num_columns + 7 + 2) / 8 bytes: Null Bitmap
+        - Data values (encoded strictly according to type)
+        """
+        try:
+            num_columns = len(columns)
+            
+            # 1. Packet Header
+            packet_body = b'\x00'
+            
+            # 2. Null Bitmap
+            # Offset is 2 bits for Binary Protocol Result Set (unlike Execute Packet which is 0)
+            bitmap_len = (num_columns + 7 + 2) // 8
+            null_bitmap = bytearray(bitmap_len)
+            
+            values_data = b""
+            
+            for i, col_name in enumerate(columns):
+                value = row.get(col_name)
+                
+                if value is None:
+                    # Set bit in null bitmap
+                    # Bit offset: i + 2
+                    byte_pos = (i + 2) // 8
+                    bit_pos = (i + 2) % 8
+                    null_bitmap[byte_pos] |= (1 << bit_pos)
+                else:
+                    # Encode value
+                    str_value = self._decrypt_value_for_vds(col_name, value)
+                    
+                    # In VDS, we treat everything as strings (VARCHAR) because
+                    # our console service returns Python strings/objects, and we declared
+                    # columns as VARCHAR (0xfd) in column definitions.
+                    # Binary Protocol for VARCHAR is Length-Encoded String.
+                    
+                    encoded_val = str_value.encode('utf-8')
+                    values_data += self._encode_length_encoded_int(len(encoded_val)) + encoded_val
+
+            packet_body += null_bitmap + values_data
+            
+            # Add Header
+            packet_length = len(packet_body)
+            header = struct.pack('<I', packet_length)[:3] + bytes([sequence_number])
+            
+            return header + packet_body
+            
+        except Exception as e:
+            logger.error(f"Error building binary data row: {e}")
+            raise
 
     def _build_mysql_greeting_packet(self) -> bytes:
         """Build MySQL greeting (handshake) packet"""
