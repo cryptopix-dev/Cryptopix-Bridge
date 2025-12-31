@@ -1547,6 +1547,11 @@ class VDSInstance:
 
             # If value is already a string, check if it's actually encrypted hex data
             if isinstance(value, str):
+                # Skip MySQL system variables
+                if value.startswith('@@'):
+                    logger.debug(f"VDS DECRYPT: Skipping MySQL system variable in {col_name}")
+                    return value
+                    
                 # Check if it's a hex string that represents encrypted data
                 if len(value) > 100 and len(value) % 2 == 0 and all(c in '0123456789abcdefABCDEF' for c in value):
                     try:
@@ -1593,7 +1598,21 @@ class VDSInstance:
             packet = b""
 
             for col_name in columns:
-                value = row.get(col_name, None)
+                # Handle different row formats (dict for SQL queries, list/tuple for SHOW commands)
+                if isinstance(row, dict):
+                    value = row.get(col_name)
+                elif isinstance(row, (list, tuple)):
+                    # Iterate by index for list-based rows
+                    idx = columns.index(col_name) if col_name in columns else -1
+                    if idx >= 0 and idx < len(row):
+                        value = row[idx]
+                    else:
+                        # Fallback to current iterator index if column names don't match
+                        # This happens when columns arg doesn't match row structure
+                        current_idx = columns.index(col_name)
+                        value = row[current_idx] if current_idx < len(row) else None
+                else:
+                    value = None
 
                 # Handle NULL values
                 if value is None:

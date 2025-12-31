@@ -1610,8 +1610,24 @@ class ConsoleService:
                         logger.debug(
                             f"Converted memoryview to bytes for column {col_name}, length: {len(raw_value)}")
 
+                    # Skip decryption tests for obvious non-encrypted data
+                    skip_decryption_test = False
+                    if isinstance(raw_value, str):
+                        # Skip MySQL system variables
+                        if raw_value.startswith('@@'):
+                            skip_decryption_test = True
+                            logger.debug(f"Skipping decryption test for MySQL system variable: {col_name}")
+                        # Skip very short strings (encrypted data is typically much larger)
+                        elif len(raw_value) < 100:
+                            skip_decryption_test = True
+                            logger.debug(f"Skipping decryption test for short string: {col_name} (length: {len(raw_value)})")
+                        # Skip strings that look like plain text (no binary markers)
+                        elif raw_value.isprintable() and not raw_value.startswith('\\x'):
+                            skip_decryption_test = True
+                            logger.debug(f"Skipping decryption test for plain text string: {col_name}")
+
                     # For encrypted databases, try to decrypt all binary data that looks like it could be encrypted
-                    if isinstance(raw_value, bytes) and len(raw_value) > 10:  # Reduced threshold
+                    if not skip_decryption_test and isinstance(raw_value, bytes) and len(raw_value) > 100:
                         # Try to decrypt and see if it succeeds (CLWE will raise exception for invalid data)
                         try:
                             test_decrypt = clwe_encryptor.decrypt_value(
@@ -1628,7 +1644,7 @@ class ConsoleService:
                             is_encrypted = False
 
                     # Check if it's a string containing binary data (PostgreSQL BYTEA returned as string)
-                    elif isinstance(raw_value, str) and len(raw_value) > 10:
+                    elif not skip_decryption_test and isinstance(raw_value, str) and len(raw_value) > 100:
                         # Try to decode as latin-1 and test decryption
                         try:
                             binary_data = raw_value.encode('latin-1')
