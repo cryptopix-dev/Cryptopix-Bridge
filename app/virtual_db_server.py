@@ -1803,7 +1803,7 @@ class VDSInstance:
                 # Binary Data row packets
                 for row in rows:
                     try:
-                        row_packet = self._build_mysql_binary_data_row_packet(row, columns, sequence_number)
+                        row_packet = self._build_mysql_binary_data_row_packet(row, columns, column_types, sequence_number)
                         packets.append(row_packet)
                         sequence_number = (sequence_number + 1) % 256
                     except Exception as e:
@@ -1823,7 +1823,8 @@ class VDSInstance:
 
         return packets
 
-    def _build_mysql_binary_data_row_packet(self, row: Dict[str, Any], columns: List[str], sequence_number: int) -> bytes:
+    def _build_mysql_binary_data_row_packet(self, row: Dict[str, Any], columns: List[str], 
+                                          column_types: Dict[str, int], sequence_number: int) -> bytes:
         """
         Build a Binary Protocol Data Row Packet.
         Format:
@@ -1838,7 +1839,7 @@ class VDSInstance:
             packet_body = b'\x00'
             
             # 2. Null Bitmap
-            # Offset is 2 bits for Binary Protocol Result Set (unlike Execute Packet which is 0)
+            # Offset is 2 bits for Binary Protocol Result Set
             bitmap_len = (num_columns + 7 + 2) // 8
             null_bitmap = bytearray(bitmap_len)
             
@@ -1852,54 +1853,132 @@ class VDSInstance:
                     if isinstance(row, dict):
                         value = row.get(col_name)
                     elif isinstance(row, (list, tuple)):
-                        # Try to get value by column index first
                         if i < len(row):
                             value = row[i]
                         else:
-                            # Fallback: try to find column name in columns list
                             try:
                                 actual_idx = columns.index(col_name)
                                 if actual_idx < len(row):
                                     value = row[actual_idx]
                                 else:
-                                    logger.warning(
-                                        f"Binary protocol: Column index {actual_idx} out of range for row with {len(row)} elements")
                                     value = None
                             except ValueError:
-                                logger.warning(
-                                    f"Binary protocol: Column '{col_name}' not found in columns list")
                                 value = None
                     else:
-                        # Unknown row type
-                        logger.warning(
-                            f"Binary protocol: Unexpected row type: {type(row)}")
                         value = row.get(col_name) if hasattr(row, 'get') else None
-                except Exception as e:
-                    logger.error(
-                        f"Binary protocol: Error extracting value for column '{col_name}': {e}")
+                except Exception:
                     value = None
                 
                 if value is None:
-                    # Set bit in null bitmap
-                    # Bit offset: i + 2
+                    # Set bit in null bitmap (offset by 2)
                     byte_pos = (i + 2) // 8
                     bit_pos = (i + 2) % 8
                     null_bitmap[byte_pos] |= (1 << bit_pos)
                 else:
-                    # Encode value
+                    # Encode value based on column type
                     try:
-                        str_value = self._decrypt_value_for_vds(col_name, value)
+                        # Decrypt/convert value first
+                        col_type = column_types.get(col_name, 0xfd) # Default VAR_STRING
+                        typed_value = self._decrypt_value_for_vds(col_name, value, col_type)
                         
-                        # In VDS, we treat everything as strings (VARCHAR) because
-                        # our console service returns Python strings/objects, and we declared
-                        # columns as VARCHAR (0xfd) in column definitions.
-                        # Binary Protocol for VARCHAR is Length-Encoded String.
+                        # Encode based on MySQL Type
+                        encoded_val = b""
                         
-                        encoded_val = str_value.encode('utf-8')
-                        values_data += self._encode_length_encoded_int(len(encoded_val)) + encoded_val
+                        if col_type in (1,): # MYSQL_TYPE_TINY
+                            val = int(typed_value)
+                            encoded_val = struct.pack('<b', val)
+                            
+                        elif col_type in (2, 13): # MYSQL_TYPE_SHORT, MYSQL_TYPE_YEAR
+                            val = int(typed_value)
+                            encoded_val = struct.pack('<h', val)
+                            
+                        elif col_type in (3, 9): # MYSQL_TYPE_LONG, MYSQL_TYPE_INT24
+                            val = int(typed_value)
+                            encoded_val = struct.pack('<i', val)
+                            
+                        elif col_type in (8,): # MYSQL_TYPE_LONGLONG
+                            val = int(typed_value)
+                            encoded_val = struct.pack('<q', val)
+                            
+                        elif col_type in (4,): # MYSQL_TYPE_FLOAT
+                            val = float(typed_value)
+                            encoded_val = struct.pack('<f', val)
+                            
+                        elif col_type in (5,): # MYSQL_TYPE_DOUBLE
+                            val = float(typed_value)
+                            encoded_val = struct.pack('<d', val)
+                            
+                        elif col_type in (10, 12, 7): # DATE, DATETIME, TIMESTAMP
+                            # Binary encoding for dates
+                            from datetime import date, datetime
+                            if isinstance(typed_value, (date, datetime)):
+                                dt = typed_value
+                            else:
+                                # Try parsing string
+                                try:
+                                    if len(str(typed_value)) > 10:
+                                        dt = datetime.fromisoformat(str(typed_value).replace('Z', '+00:00'))
+                                    else:
+                                        dt = date.fromisoformat(str(typed_value))
+                                except:
+                                    dt = None
+
+                            if dt:
+                                year = dt.year
+                                month = dt.month
+                                day = dt.day
+                                hour = 0
+                                minute = 0
+                                second = 0
+                                microsecond = 0
+                                
+                                if isinstance(dt, datetime):
+                                    hour = dt.hour
+                                    minute = dt.minute
+                                    second = dt.second
+                                    microsecond = dt.microsecond
+                                
+                                if microsecond > 0:
+                                    encoded_val = bytes([11]) + struct.pack('<HBBBBBB', year, month, day, hour, minute, second) + struct.pack('<I', microsecond)
+                                elif hour > 0 or minute > 0 or second > 0:
+                                    encoded_val = bytes([7]) + struct.pack('<HBBBBBB', year, month, day, hour, minute, second)
+                                else:
+                                    encoded_val = bytes([4]) + struct.pack('<HBB', year, month, day)
+                            else:
+                                encoded_val = bytes([0])
+                                
+                        elif col_type in (11,): # TIME
+                            # Binary encoding for time
+                            from datetime import time, timedelta
+                            if isinstance(typed_value, time):
+                                t = typed_value
+                                encoded_val = bytes([8, 0]) + struct.pack('<I', 0) + struct.pack('<BBBB', t.hour, t.minute, t.second, 0)
+                            elif isinstance(typed_value, timedelta):
+                                total_seconds = int(typed_value.total_seconds())
+                                is_negative = 1 if total_seconds < 0 else 0
+                                total_seconds = abs(total_seconds)
+                                days = total_seconds // 86400
+                                rem_seconds = total_seconds % 86400
+                                hours = rem_seconds // 3600
+                                rem_seconds %= 3600
+                                minutes = rem_seconds // 60
+                                seconds = rem_seconds % 60
+                                
+                                encoded_val = bytes([8, is_negative]) + struct.pack('<I', days) + struct.pack('<BBBB', hours, minutes, seconds)
+                            else:
+                                encoded_val = bytes([0])
+                        
+                        else:
+                            # Default to Length-Encoded String (VARCHAR, TEXT, JSON, etc.)
+                            str_value = str(typed_value)
+                            data_bytes = str_value.encode('utf-8')
+                            encoded_val = self._encode_length_encoded_int(len(data_bytes)) + data_bytes
+                            
+                        values_data += encoded_val
+                        
                     except Exception as e:
                         logger.error(
-                            f"Binary protocol: Error encoding value for column '{col_name}': {e}")
+                            f"Binary protocol: Error encoding value for column '{col_name}' type {col_type}: {e}")
                         # Treat as NULL on error
                         byte_pos = (i + 2) // 8
                         bit_pos = (i + 2) % 8
@@ -1911,15 +1990,10 @@ class VDSInstance:
             packet_length = len(packet_body)
             header = struct.pack('<I', packet_length)[:3] + bytes([sequence_number])
             
-            logger.debug(
-                f"Built binary data row packet: seq={sequence_number}, length={packet_length}, columns={num_columns}")
             return header + packet_body
             
         except Exception as e:
             logger.error(f"Critical error building binary data row: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            # Return minimal error packet
             return b""
 
     def _build_mysql_greeting_packet(self) -> bytes:
