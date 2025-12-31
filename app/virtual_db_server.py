@@ -1538,80 +1538,132 @@ class VDSInstance:
         """
         try:
             # Skip tag columns
-            if col_name.startswith('tag_'):
+            if col_name and col_name.startswith('tag_'):
                 return ""
 
             # If value is None, return empty string
             if value is None:
                 return ""
 
-            # If value is already a string, check if it's actually encrypted hex data
+            # Handle different value types
             if isinstance(value, str):
-                # Skip MySQL system variables
-                if value.startswith('@@'):
-                    logger.debug(f"VDS DECRYPT: Skipping MySQL system variable in {col_name}")
+                # Skip MySQL system variables and special markers
+                if value.startswith('@@') or value.startswith('<') or value in ['NULL', 'null']:
+                    logger.debug(f"VDS DECRYPT: Skipping special value in {col_name}: {value[:50]}")
                     return value
                     
                 # Check if it's a hex string that represents encrypted data
-                if len(value) > 100 and len(value) % 2 == 0 and all(c in '0123456789abcdefABCDEF' for c in value):
+                # Only attempt decryption if it's a long hex string (likely encrypted)
+                if len(value) > 100 and len(value) % 2 == 0:
                     try:
-                        hex_bytes = bytes.fromhex(value)
-                        if hex_bytes.startswith(b'RIFF') and b'WEBP' in hex_bytes[:20]:
-                            logger.info(
-                                f"VDS DECRYPT: Found encrypted hex WebP data in {col_name}")
-                            decrypted_value = clwe_encryptor.decrypt_value(
-                                hex_bytes, settings.CRYPTOPIX_DEFAULT_PASSWORD)
-                            return str(decrypted_value)
+                        # Verify it's all hex characters
+                        if all(c in '0123456789abcdefABCDEF' for c in value):
+                            hex_bytes = bytes.fromhex(value)
+                            # Check for WebP signature (encrypted images)
+                            if hex_bytes.startswith(b'RIFF') and b'WEBP' in hex_bytes[:20]:
+                                logger.info(
+                                    f"VDS DECRYPT: Found encrypted hex WebP data in {col_name}")
+                                decrypted_value = clwe_encryptor.decrypt_value(
+                                    hex_bytes, settings.CRYPTOPIX_DEFAULT_PASSWORD)
+                                return str(decrypted_value)
                     except Exception as e:
                         logger.debug(
-                            f"VDS DECRYPT: Hex string in {col_name} not encrypted")
-                # Otherwise, it's already decrypted
+                            f"VDS DECRYPT: Hex string in {col_name} not encrypted or decryption failed: {e}")
+                
+                # Otherwise, it's already decrypted or plain text
                 return value
 
-            # If value is bytes, it needs decryption
-            if isinstance(value, bytes):
+            # If value is bytes, it might need decryption
+            elif isinstance(value, bytes):
+                # Skip very small byte values (likely not encrypted)
+                if len(value) < 10:
+                    try:
+                        return value.decode('utf-8', errors='ignore')
+                    except:
+                        return value.hex()
+                
                 try:
                     logger.info(
-                        f"VDS DECRYPT: Decrypting bytes data in {col_name} (size: {len(value)})")
+                        f"VDS DECRYPT: Attempting to decrypt bytes data in {col_name} (size: {len(value)})")
                     decrypted_value = clwe_encryptor.decrypt_value(
                         value, settings.CRYPTOPIX_DEFAULT_PASSWORD)
                     logger.info(
                         f"VDS DECRYPT: Successfully decrypted {col_name}")
                     return str(decrypted_value)
                 except Exception as e:
-                    logger.error(
-                        f"VDS DECRYPT: Failed to decrypt bytes in {col_name}: {e}")
-                    # If decryption fails, it might not be encrypted - return as hex
-                    return value.hex()
+                    logger.debug(
+                        f"VDS DECRYPT: Bytes in {col_name} not encrypted or decryption failed: {e}")
+                    # If decryption fails, try to decode as UTF-8, otherwise return as hex
+                    try:
+                        return value.decode('utf-8', errors='ignore')
+                    except:
+                        return value.hex()
 
-            # For any other type, convert to string
-            return str(value)
+            # Handle numeric types
+            elif isinstance(value, (int, float, bool)):
+                return str(value)
+            
+            # Handle other types (datetime, etc.)
+            else:
+                try:
+                    return str(value)
+                except Exception as e:
+                    logger.warning(f"VDS DECRYPT: Could not convert {type(value)} to string: {e}")
+                    return ""
 
         except Exception as e:
             logger.error(
                 f"VDS DECRYPT: Critical error processing {col_name}: {e}")
-            return f"<ERROR:{str(e)}>"
+            import traceback
+            logger.error(traceback.format_exc())
+            # Return a safe error marker instead of raising
+            return f"<ERROR:{str(e)[:50]}>"
 
     def _build_mysql_data_row_packet(self, row: Dict[str, Any], columns: List[str], sequence_number: int) -> bytes:
         """Build data row packet with advanced decryption support using console service logic"""
         try:
             packet = b""
 
-            for col_name in columns:
+            for col_idx, col_name in enumerate(columns):
+                value = None
+                
                 # Handle different row formats (dict for SQL queries, list/tuple for SHOW commands)
-                if isinstance(row, dict):
-                    value = row.get(col_name)
-                elif isinstance(row, (list, tuple)):
-                    # Iterate by index for list-based rows
-                    idx = columns.index(col_name) if col_name in columns else -1
-                    if idx >= 0 and idx < len(row):
-                        value = row[idx]
+                try:
+                    if isinstance(row, dict):
+                        # Dictionary-based row (most common for SELECT queries)
+                        value = row.get(col_name)
+                    elif isinstance(row, (list, tuple)):
+                        # List/Tuple-based row (common for SHOW commands and system queries)
+                        # Try to get value by column index first
+                        if col_idx < len(row):
+                            value = row[col_idx]
+                        else:
+                            # Fallback: try to find column name in columns list and use that index
+                            try:
+                                actual_idx = columns.index(col_name)
+                                if actual_idx < len(row):
+                                    value = row[actual_idx]
+                                else:
+                                    logger.warning(
+                                        f"Column index {actual_idx} out of range for row with {len(row)} elements")
+                                    value = None
+                            except ValueError:
+                                logger.warning(
+                                    f"Column '{col_name}' not found in columns list")
+                                value = None
                     else:
-                        # Fallback to current iterator index if column names don't match
-                        # This happens when columns arg doesn't match row structure
-                        current_idx = columns.index(col_name)
-                        value = row[current_idx] if current_idx < len(row) else None
-                else:
+                        # Unknown row type - try to convert to dict or use as-is
+                        logger.warning(
+                            f"Unexpected row type: {type(row)}. Attempting to handle...")
+                        try:
+                            # Try to access as dict
+                            value = row.get(col_name) if hasattr(row, 'get') else None
+                        except:
+                            value = None
+                            
+                except Exception as e:
+                    logger.error(
+                        f"Error extracting value for column '{col_name}' at index {col_idx}: {e}")
                     value = None
 
                 # Handle NULL values
@@ -1619,27 +1671,34 @@ class VDSInstance:
                     # NULL is represented as 0xFB (251) in MySQL protocol
                     packet += b'\xfb'
                 else:
-                    # Use the same decryption logic as console service for consistency
-                    str_value = self._decrypt_value_for_vds(col_name, value)
+                    try:
+                        # Use the same decryption logic as console service for consistency
+                        str_value = self._decrypt_value_for_vds(col_name, value)
 
-                    # Encode as UTF-8
-                    encoded_value = str_value.encode('utf-8')
+                        # Encode as UTF-8
+                        encoded_value = str_value.encode('utf-8')
 
-                    # Length-encoded: proper encoding for any length
-                    packet += self._encode_length_encoded_int(len(encoded_value)) + encoded_value
+                        # Length-encoded: proper encoding for any length
+                        packet += self._encode_length_encoded_int(len(encoded_value)) + encoded_value
+                    except Exception as e:
+                        logger.error(
+                            f"Error encoding value for column '{col_name}': {e}")
+                        # Send NULL on error
+                        packet += b'\xfb'
 
             packet_length = len(packet)
             header = struct.pack('<I', packet_length)[
                 :3] + bytes([sequence_number])
 
             logger.debug(
-                f"Built data row packet: seq={sequence_number}, content_length={packet_length}")
+                f"Built data row packet: seq={sequence_number}, content_length={packet_length}, columns={len(columns)}")
             return header + packet
 
         except Exception as e:
-            logger.error(f"Error building data row packet: {e}")
+            logger.error(f"Critical error building data row packet: {e}")
             import traceback
             logger.error(traceback.format_exc())
+            # Return empty packet on critical error
             return b""
 
     # BINARY PROTOCOL SUPPORT FOR PREPARED STATEMENTS
@@ -1723,7 +1782,39 @@ class VDSInstance:
             values_data = b""
             
             for i, col_name in enumerate(columns):
-                value = row.get(col_name)
+                value = None
+                
+                # Use the same robust row handling as text protocol
+                try:
+                    if isinstance(row, dict):
+                        value = row.get(col_name)
+                    elif isinstance(row, (list, tuple)):
+                        # Try to get value by column index first
+                        if i < len(row):
+                            value = row[i]
+                        else:
+                            # Fallback: try to find column name in columns list
+                            try:
+                                actual_idx = columns.index(col_name)
+                                if actual_idx < len(row):
+                                    value = row[actual_idx]
+                                else:
+                                    logger.warning(
+                                        f"Binary protocol: Column index {actual_idx} out of range for row with {len(row)} elements")
+                                    value = None
+                            except ValueError:
+                                logger.warning(
+                                    f"Binary protocol: Column '{col_name}' not found in columns list")
+                                value = None
+                    else:
+                        # Unknown row type
+                        logger.warning(
+                            f"Binary protocol: Unexpected row type: {type(row)}")
+                        value = row.get(col_name) if hasattr(row, 'get') else None
+                except Exception as e:
+                    logger.error(
+                        f"Binary protocol: Error extracting value for column '{col_name}': {e}")
+                    value = None
                 
                 if value is None:
                     # Set bit in null bitmap
@@ -1733,15 +1824,23 @@ class VDSInstance:
                     null_bitmap[byte_pos] |= (1 << bit_pos)
                 else:
                     # Encode value
-                    str_value = self._decrypt_value_for_vds(col_name, value)
-                    
-                    # In VDS, we treat everything as strings (VARCHAR) because
-                    # our console service returns Python strings/objects, and we declared
-                    # columns as VARCHAR (0xfd) in column definitions.
-                    # Binary Protocol for VARCHAR is Length-Encoded String.
-                    
-                    encoded_val = str_value.encode('utf-8')
-                    values_data += self._encode_length_encoded_int(len(encoded_val)) + encoded_val
+                    try:
+                        str_value = self._decrypt_value_for_vds(col_name, value)
+                        
+                        # In VDS, we treat everything as strings (VARCHAR) because
+                        # our console service returns Python strings/objects, and we declared
+                        # columns as VARCHAR (0xfd) in column definitions.
+                        # Binary Protocol for VARCHAR is Length-Encoded String.
+                        
+                        encoded_val = str_value.encode('utf-8')
+                        values_data += self._encode_length_encoded_int(len(encoded_val)) + encoded_val
+                    except Exception as e:
+                        logger.error(
+                            f"Binary protocol: Error encoding value for column '{col_name}': {e}")
+                        # Treat as NULL on error
+                        byte_pos = (i + 2) // 8
+                        bit_pos = (i + 2) % 8
+                        null_bitmap[byte_pos] |= (1 << bit_pos)
 
             packet_body += null_bitmap + values_data
             
@@ -1749,11 +1848,16 @@ class VDSInstance:
             packet_length = len(packet_body)
             header = struct.pack('<I', packet_length)[:3] + bytes([sequence_number])
             
+            logger.debug(
+                f"Built binary data row packet: seq={sequence_number}, length={packet_length}, columns={num_columns}")
             return header + packet_body
             
         except Exception as e:
-            logger.error(f"Error building binary data row: {e}")
-            raise
+            logger.error(f"Critical error building binary data row: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            # Return minimal error packet
+            return b""
 
     def _build_mysql_greeting_packet(self) -> bytes:
         """Build MySQL greeting (handshake) packet"""
