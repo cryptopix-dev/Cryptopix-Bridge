@@ -10,6 +10,11 @@ from pathlib import Path
 
 from app.virtual_db_server import VDSInstance
 from app.services.database_registry import database_registry
+from app.core.encryption import clwe_encryptor
+from app.config import settings
+from sqlalchemy import create_engine, text, inspect
+import json
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -149,13 +154,28 @@ class VDSManager:
                 table_mappings = {}
                 migration_state = None
 
+                # Load mappings first to check for needed repairs
+                mappings_data = None
                 if mappings_file.exists():
-                    import json
-                    with open(mappings_file, 'r') as f:
-                        mappings_data = json.load(f)
-                        table_mappings = mappings_data.get(
-                            "table_mappings", {})
+                    try:
+                        with open(mappings_file, 'r') as f:
+                            mappings_data = json.load(f)
+                    except Exception as e:
+                        logger.error(f"Failed to load mappings file: {e}")
 
+                # Auto-repair hashed passwords if needed
+                if mappings_data and self._repair_hashed_passwords(database["encrypted_db_url"], mappings_file, mappings_data):
+                     # Reload if repaired
+                     try:
+                        with open(mappings_file, 'r') as f:
+                            mappings_data = json.load(f)
+                     except Exception as e:
+                        logger.error(f"Failed to reload mappings after repair: {e}")
+
+                if mappings_data:
+                    table_mappings = mappings_data.get("table_mappings", {})
+
+                # Legacy/Redundant block removed by update
                 if migration_state_file.exists():
                     import json
                     with open(migration_state_file, 'r') as f:
@@ -521,6 +541,105 @@ class VDSManager:
 
         except Exception as e:
             logger.error(f"Failed to remove VDS instance: {e}")
+            return False
+
+    def _repair_hashed_passwords(self, db_url: str, mappings_file: Path, mappings_data: Dict[str, Any]) -> bool:
+        """
+        Check for and repair likely hashed password columns that are wrongly encrypted.
+        Returns True if repairs were made.
+        """
+        try:
+            repaired = False
+            table_mappings = mappings_data.get("table_mappings", {})
+            
+            for table_name, table_info in table_mappings.items():
+                encrypted_cols = table_info.get("encrypted_columns", {})
+                
+                # Identify password columns that are encrypted
+                cols_to_fix = []
+                for col_name, col_data in encrypted_cols.items():
+                    # Check for "password", "pwd", "hash" in column name
+                    if any(s in col_name.lower() for s in ['password', 'pwd', '_hash']):
+                        cols_to_fix.append(col_name)
+                
+                if not cols_to_fix:
+                    continue
+                    
+                logger.info(f"Auto-repair: Found potential hashed password columns in '{table_name}': {cols_to_fix}")
+                
+                # Connect to DB
+                engine_url = db_url
+                if engine_url.startswith('mysql://'):
+                    engine_url = engine_url.replace('mysql://', 'mysql+pymysql://', 1)
+                
+                try:
+                    engine = create_engine(engine_url)
+                    inspector = inspect(engine)
+                    constraints = inspector.get_pk_constraint(table_name)
+                    pk_columns = constraints.get('constrained_columns', []) if constraints else []
+                    
+                    if not pk_columns:
+                        # Try to blindly guess id? No, safer to skip
+                        logger.warning(f"Skipping table '{table_name}' - no PK found.")
+                        continue
+                    pk_col = pk_columns[0]
+                    
+                    with engine.connect() as conn:
+                        for col_name in cols_to_fix:
+                            col_info = encrypted_cols[col_name]
+                            encrypted_col_name = col_info.get("encrypted_name", col_name)
+                            
+                            # Decrypt data
+                            select_query = text(f"SELECT {pk_col}, {encrypted_col_name} FROM {table_name}")
+                            rows = conn.execute(select_query).fetchall()
+                            
+                            updated_count = 0
+                            for row in rows:
+                                row_pk = row[0]
+                                enc_val = row[1]
+                                if enc_val:
+                                    try:
+                                        # Attempt decryption
+                                        decrypted_val = clwe_encryptor.decrypt_value(enc_val, settings.CRYPTOPIX_DEFAULT_PASSWORD)
+                                        # Update back
+                                        update_stmt = text(f"UPDATE {table_name} SET {encrypted_col_name} = :val WHERE {pk_col} = :pk")
+                                        conn.execute(update_stmt, {"val": decrypted_val, "pk": row_pk})
+                                        updated_count += 1
+                                    except Exception as e:
+                                        pass # Failed to decrypt, might already be plaintext
+                                        
+                            conn.commit()
+                            logger.info(f"Repaired {updated_count} rows for column '{col_name}' in '{table_name}'")
+                            
+                            # Update Mapping
+                            # Mark key for deletion (using separate list to avoid runtime error)
+                            
+                            # Add to non_encrypted_columns
+                            non_enc = table_info.get("non_encrypted_columns", [])
+                            if encrypted_col_name not in non_enc:
+                                non_enc.append(encrypted_col_name)
+                            table_info["non_encrypted_columns"] = non_enc
+                            
+                            repaired = True
+                        
+                        # Clean up encrypted_cols dict after iteration
+                        for col in cols_to_fix:
+                             if col in encrypted_cols:
+                                 del encrypted_cols[col]
+
+                except Exception as e:
+                    logger.error(f"Error during DB repair for table {table_name}: {e}")
+            
+            if repaired:
+                # Save updated mappings
+                with open(mappings_file, 'w') as f:
+                    json.dump(mappings_data, f, indent=4)
+                logger.info("Updated mappings.json with password repairs.")
+                
+            return repaired
+            
+        except Exception as e:
+            logger.error(f"Auto-repair failed: {e}")
             return False
 
 
