@@ -69,6 +69,25 @@ class ConsoleService:
         # Per-database mapping storage
         self.database_mappings = {}
 
+    # Class-level engine cache to share pools across all ConsoleService instances
+    _engines = {}
+    _engines_lock = threading.Lock()
+
+    def _get_engine(self, database_url: str):
+        """Get or create cached engine for the database"""
+        with ConsoleService._engines_lock:
+            if database_url not in ConsoleService._engines:
+                logger.info(f"Creating new cached engine for {database_url}")
+                # Use a pool for better performance in multi-threaded VDS
+                ConsoleService._engines[database_url] = create_engine(
+                    database_url,
+                    pool_size=15,
+                    max_overflow=25,
+                    pool_recycle=1800, # Recycle faster to avoid stale connections
+                    pool_pre_ping=True # Verify connection before usage
+                )
+            return ConsoleService._engines[database_url]
+
     def _load_migration_state_from_files(self, encrypted_db_url: str = None) -> dict:
         """Load migration state from database-specific schema files"""
         try:
@@ -456,10 +475,9 @@ class ConsoleService:
             successful_commands = 0
             failed_commands = 0
 
-            # Batch processing configuration
             # Process in batches of 50 or less
             batch_size = min(50, len(statements))
-            engine = create_engine(database_url)
+            engine = self._get_engine(database_url)
 
             try:
                 with engine.connect() as conn:
@@ -1015,9 +1033,8 @@ class ConsoleService:
             logger.debug(f"Query to execute: {query_to_execute}")
             logger.debug(f"Display query: {display_query}")
 
-            # Execute the translated query
-            logger.info(f"Connecting to database: {database_url}")
-            engine = create_engine(database_url)
+            # Execute the translated query using cached engine
+            engine = self._get_engine(database_url)
             try:
                 # Get query type from metadata
                 query_type = metadata.get("query_type", "UNKNOWN")
@@ -1277,12 +1294,13 @@ class ConsoleService:
             if not database_url:
                 raise ValueError("Database URL is required when no connection is provided")
                 
-            engine = create_engine(database_url)
+            engine = self._get_engine(database_url)
             try:
                 with engine.connect() as conn:
                     return self._run_ddl_execution(conn, sql_query, query_type)
-            finally:
-                engine.dispose()
+            except Exception as e:
+                logger.error(f"Error in DDL session: {e}")
+                raise
 
         except Exception as e:
             logger.error(f"DDL command execution failed: {e}")
@@ -1628,17 +1646,27 @@ class ConsoleService:
                         if raw_value.startswith('@@'):
                             skip_decryption_test = True
                             logger.debug(f"Skipping decryption test for MySQL system variable: {col_name}")
-                        # Skip very short strings (encrypted data is typically much larger)
-                        elif len(raw_value) < 100:
+                        # Skip very short strings
+                        elif len(raw_value) < 20:
                             skip_decryption_test = True
                             logger.debug(f"Skipping decryption test for short string: {col_name} (length: {len(raw_value)})")
                         # Skip strings that look like plain text (no binary markers)
                         elif raw_value.isprintable() and not raw_value.startswith('\\x'):
-                            skip_decryption_test = True
-                            logger.debug(f"Skipping decryption test for plain text string: {col_name}")
+                            # Only skip if it also doesn't look like hex-encoded encrypted data
+                            is_hex_encrypted = (
+                                len(raw_value) >= 24 and 
+                                len(raw_value) % 2 == 0 and 
+                                all(c in '0123456789abcdefABCDEF' for c in raw_value[:20]) and
+                                raw_value.startswith('52494646') # RIFF in hex
+                            )
+                            if not is_hex_encrypted:
+                                skip_decryption_test = True
+                                logger.debug(f"Skipping decryption test for plain text string: {col_name}")
+                            else:
+                                logger.debug(f"Allowing decryption test for potential hex-encoded encrypted data: {col_name}")
 
                     # For encrypted databases, try to decrypt all binary data that looks like it could be encrypted
-                    if not skip_decryption_test and isinstance(raw_value, bytes) and len(raw_value) > 100:
+                    if not skip_decryption_test and isinstance(raw_value, bytes) and len(raw_value) >= 12:
                         # Try to decrypt and see if it succeeds (CLWE will raise exception for invalid data)
                         try:
                             test_decrypt = clwe_encryptor.decrypt_value(
@@ -1655,7 +1683,7 @@ class ConsoleService:
                             is_encrypted = False
 
                     # Check if it's a string containing binary data (PostgreSQL BYTEA returned as string)
-                    elif not skip_decryption_test and isinstance(raw_value, str) and len(raw_value) > 100:
+                    elif not skip_decryption_test and isinstance(raw_value, str) and len(raw_value) >= 24:
                         # Try to decode as latin-1 and test decryption
                         try:
                             binary_data = raw_value.encode('latin-1')
@@ -3057,8 +3085,8 @@ class ConsoleService:
         Execute query using batch decryption for enhanced functionality
         """
         try:
-            # Get database connection
-            engine = create_engine(database_url)
+            # Get database connection from cache
+            engine = self._get_engine(database_url)
             with engine.connect() as conn:
                 # Use the enhanced translator's batch decryption execution
                 result_rows = enhanced_sql_translator.execute_with_batch_decryption(

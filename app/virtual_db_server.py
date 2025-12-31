@@ -592,6 +592,7 @@ class VDSInstance:
                         header += chunk
 
                     if len(header) != 4:
+                        logger.info(f"Connection {connection_id} closed by client (incomplete header)")
                         break
 
                     packet_length = struct.unpack('<I', header[:3] + b'\x00')[0]
@@ -1572,6 +1573,13 @@ class VDSInstance:
         if value is None or (isinstance(value, str) and value.upper() == 'NONE'):
             return None
             
+        # If value is bytes, try to decode as UTF-8
+        if isinstance(value, bytes):
+            try:
+                value = value.decode('utf-8')
+            except UnicodeDecodeError:
+                pass
+
         # If no type code provided, return as-is
         if mysql_type_code is None:
             return value
@@ -1664,24 +1672,39 @@ class VDSInstance:
 
             # Handle encrypted strings
             if isinstance(value, str):
-                if len(value) > 100 and len(value) % 2 == 0 and all(c in '0123456789abcdefABCDEF' for c in value):
+                # Detect hex-encoded encrypted data
+                if len(value) >= 24 and all(c in '0123456789abcdefABCDEF' for c in value):
                     try:
-                        hex_bytes = bytes.fromhex(value)
+                        # Handle odd-length hex by padding (might happen due to truncation)
+                        if len(value) % 2 != 0:
+                            logger.warning(f"VDS: Odd-length hex string detected for {col_name}, likely truncated")
+                            value_to_hex = value + '0'
+                        else:
+                            value_to_hex = value
+                            
+                        hex_bytes = bytes.fromhex(value_to_hex)
                         if hex_bytes.startswith(b'RIFF') and b'WEBP' in hex_bytes[:20]:
                             decrypted = clwe_encryptor.decrypt_value(hex_bytes, settings.CRYPTOPIX_DEFAULT_PASSWORD)
                             return self._convert_to_python_type(decrypted, mysql_type_code)
+                        elif len(value) >= 60 and hex_bytes.startswith(b'RIFF'):
+                             # Even if 'WEBP' is not in first 20, if it looks enough like a packet, try it
+                             try:
+                                decrypted = clwe_encryptor.decrypt_value(hex_bytes, settings.CRYPTOPIX_DEFAULT_PASSWORD)
+                                return self._convert_to_python_type(decrypted, mysql_type_code)
+                             except: pass
                     except: pass
                 
                 return self._convert_to_python_type(value, mysql_type_code)
 
             # Handle bytes
             if isinstance(value, bytes):
-                try:
-                    decrypted = clwe_encryptor.decrypt_value(value, settings.CRYPTOPIX_DEFAULT_PASSWORD)
-                    return self._convert_to_python_type(decrypted, mysql_type_code)
-                except:
-                    try: return value.decode('utf-8', errors='ignore')
-                    except: return value.hex()
+                if len(value) >= 12:
+                    try:
+                        decrypted = clwe_encryptor.decrypt_value(value, settings.CRYPTOPIX_DEFAULT_PASSWORD)
+                        return self._convert_to_python_type(decrypted, mysql_type_code)
+                    except:
+                        try: return value.decode('utf-8', errors='ignore')
+                        except: return value.hex()
 
             return self._convert_to_python_type(value, mysql_type_code)
 
@@ -1704,7 +1727,10 @@ class VDSInstance:
                 if value is None:
                     packet += b'\xfb'
                 else:
+                    # Get the MySQL type code for this column
                     mysql_type_code = column_types.get(col_name)
+                    
+                    # Target value for conversion/decryption
                     typed_value = self._decrypt_value_for_vds(col_name, value, mysql_type_code)
                     
                     if isinstance(typed_value, datetime):
@@ -1715,6 +1741,12 @@ class VDSInstance:
                         str_value = typed_value.strftime('%H:%M:%S')
                     elif typed_value is None:
                         packet += b'\xfb'
+                        continue
+                    elif isinstance(typed_value, (bytes, bytearray)):
+                        # If it's still bytes after conversion, we should send it as-is (binary)
+                        # but MySQL text protocol expects string representation for many types.
+                        # For VARCHAR/TEXT it should be the raw data.
+                        packet += self._encode_length_encoded_int(len(typed_value)) + bytes(typed_value)
                         continue
                     else:
                         str_value = str(typed_value)
@@ -2026,7 +2058,7 @@ class VDSInstance:
             if col_name.startswith('tag_'): return ""
             if value is None: return ""
             if isinstance(value, str):
-                if len(value) > 100 and len(value) % 2 == 0:
+                if len(value) >= 24 and len(value) % 2 == 0:
                     try:
                         hex_bytes = bytes.fromhex(value)
                         if hex_bytes.startswith(b'RIFF') and b'WEBP' in hex_bytes[:20]:
@@ -2035,11 +2067,16 @@ class VDSInstance:
                     except: pass
                 return value
             if isinstance(value, bytes):
-                try:
-                    val = clwe_encryptor.decrypt_value(value, settings.CRYPTOPIX_DEFAULT_PASSWORD)
-                    return str(val)
-                except: return value.hex()
-            return str(value)
+                if len(value) >= 12:
+                    try:
+                        val = clwe_encryptor.decrypt_value(value, settings.CRYPTOPIX_DEFAULT_PASSWORD)
+                        # Try to decode as UTF-8
+                        try:
+                            return val.decode('utf-8')
+                        except:
+                            return val
+                    except: return value.hex()
+                return value.hex()
         except Exception as e:
             logger.error(f"VDS DECRYPT: error processing {col_name}: {e}")
             return f"<ERROR:{str(e)}>"
@@ -3525,6 +3562,13 @@ class VirtualDatabaseServer:
         if value is None or (isinstance(value, str) and value.upper() == 'NONE'):
             return None
             
+        # If value is bytes, try to decode as UTF-8
+        if isinstance(value, bytes):
+            try:
+                value = value.decode('utf-8')
+            except UnicodeDecodeError:
+                pass
+
         # If no type code provided, return as-is
         if mysql_type_code is None:
             return value
@@ -4373,6 +4417,13 @@ class VirtualDatabaseServer:
         if value is None or (isinstance(value, str) and value.upper() == 'NONE'):
             return None
             
+        # If value is bytes, try to decode as UTF-8
+        if isinstance(value, bytes):
+            try:
+                value = value.decode('utf-8')
+            except UnicodeDecodeError:
+                pass
+
         # If no type code provided, return as-is
         if mysql_type_code is None:
             return value
@@ -4486,38 +4537,35 @@ class VirtualDatabaseServer:
             # If value is already a string, check if it's actually encrypted hex data
             if isinstance(value, str):
                 # Check if it's a hex string that represents encrypted data
-                if len(value) > 100 and len(value) % 2 == 0 and all(c in '0123456789abcdefABCDEF' for c in value):
+                if len(value) >= 24 and all(c in '0123456789abcdefABCDEF' for c in value):
                     try:
-                        hex_bytes = bytes.fromhex(value)
+                        # Handle odd-length hex
+                        value_to_hex = value if len(value) % 2 == 0 else value + '0'
+                        hex_bytes = bytes.fromhex(value_to_hex)
                         if hex_bytes.startswith(b'RIFF') and b'WEBP' in hex_bytes[:20]:
-                            logger.info(
-                                f"VDS DECRYPT: Found encrypted hex WebP data in {col_name}")
-                            decrypted_value = clwe_encryptor.decrypt_value(
-                                hex_bytes, settings.CRYPTOPIX_DEFAULT_PASSWORD)
-                            # Convert decrypted value to proper type
-                            return self._convert_to_python_type(decrypted_value, mysql_type_code)
-                    except Exception as e:
-                        logger.debug(
-                            f"VDS DECRYPT: Hex string in {col_name} not encrypted")
-                # String value - apply type conversion if type code is provided
+                            logger.info(f"VDS DECRYPT: Found encrypted hex WebP data in {col_name}")
+                            decrypted = clwe_encryptor.decrypt_value(hex_bytes, settings.CRYPTOPIX_DEFAULT_PASSWORD)
+                            return self._convert_to_python_type(decrypted, mysql_type_code)
+                        elif len(value) >= 60 and hex_bytes.startswith(b'RIFF'):
+                             try:
+                                decrypted = clwe_encryptor.decrypt_value(hex_bytes, settings.CRYPTOPIX_DEFAULT_PASSWORD)
+                                return self._convert_to_python_type(decrypted, mysql_type_code)
+                             except: pass
+                    except: pass
+                
                 return self._convert_to_python_type(value, mysql_type_code)
 
             # If value is bytes, it needs decryption
             if isinstance(value, bytes):
-                try:
-                    logger.info(
-                        f"VDS DECRYPT: Decrypting bytes data in {col_name} (size: {len(value)})")
-                    decrypted_value = clwe_encryptor.decrypt_value(
-                        value, settings.CRYPTOPIX_DEFAULT_PASSWORD)
-                    logger.info(
-                        f"VDS DECRYPT: Successfully decrypted {col_name}")
-                    # Convert decrypted value to proper type
-                    return self._convert_to_python_type(decrypted_value, mysql_type_code)
-                except Exception as e:
-                    logger.error(
-                        f"VDS DECRYPT: Failed to decrypt bytes in {col_name}: {e}")
-                    # If decryption fails, it might not be encrypted - return as hex
-                    return value.hex()
+                if len(value) >= 12:
+                    try:
+                        logger.info(f"VDS DECRYPT: Decrypting bytes data in {col_name} (size: {len(value)})")
+                        decrypted_value = clwe_encryptor.decrypt_value(value, settings.CRYPTOPIX_DEFAULT_PASSWORD)
+                        return self._convert_to_python_type(decrypted_value, mysql_type_code)
+                    except Exception as e:
+                        logger.debug(f"VDS DECRYPT: Decryption failed for {col_name}: {e}")
+                        return value
+                return value
 
             # For any other type, apply type conversion if available
             return self._convert_to_python_type(value, mysql_type_code)
@@ -4607,13 +4655,11 @@ class VirtualDatabaseServer:
                     packet += NULL_BYTE
                 elif isinstance(processed_value, str):
                     packet += self._encode_length_encoded_string(processed_value)
-                elif isinstance(processed_value, int):
+                elif isinstance(processed_value, (int, float)):
                     packet += self._encode_length_encoded_string(str(processed_value))
-                elif isinstance(processed_value, float):
-                    packet += self._encode_length_encoded_string(str(processed_value))
-                elif isinstance(processed_value, bytes):
-                    # If it's still bytes, treat as BLOB/VARBINARY and encode as length-encoded string of hex
-                    packet += self._encode_length_encoded_string(processed_value.hex())
+                elif isinstance(processed_value, (bytes, bytearray)):
+                    # Send bytes directly as length-encoded string
+                    packet += self._encode_length_encoded_int(len(processed_value)) + bytes(processed_value)
                 elif isinstance(processed_value, datetime):
                     packet += self._encode_length_encoded_string(processed_value.strftime('%Y-%m-%d %H:%M:%S'))
                 elif isinstance(processed_value, date):
