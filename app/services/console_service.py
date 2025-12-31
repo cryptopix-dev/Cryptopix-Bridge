@@ -1302,17 +1302,27 @@ class ConsoleService:
         # Check if this is a query that returns results (SHOW, DESCRIBE, EXPLAIN)
         # Also TRANSACTION, DCL, CALL, USE usually don't return rows like SELECT, 
         # but CALL might. For now treating like DDL unless in specific list.
-        if query_type in ['SHOW', 'DESCRIBE', 'EXPLAIN']:
+        if query_type in ['SHOW', 'DESCRIBE', 'EXPLAIN', 'CALL']:
             # Fetch results
             rows = result.fetchall()
             columns = list(result.keys())
+            
+            # Extract column types for VDS support
+            column_types = {}
+            try:
+                if hasattr(result, 'cursor') and result.cursor and hasattr(result.cursor, 'description'):
+                    for i, desc in enumerate(result.cursor.description):
+                        if i < len(columns):
+                            column_types[columns[i]] = desc[1]
+            except Exception as e:
+                logger.warning(f"Could not extract column types for {query_type}: {e}")
             
             # Convert rows to list of dicts
             rows_as_dicts = []
             for row in rows:
                 row_dict = {}
                 for i, col_name in enumerate(columns):
-                    row_dict[col_name] = row[i]
+                    row_dict[col_name] = self._make_json_serializable(row[i])
                 rows_as_dicts.append(row_dict)
             
             logger.info(f"{query_type} command returned {len(rows_as_dicts)} rows")
@@ -1324,6 +1334,7 @@ class ConsoleService:
                 "rows": rows_as_dicts,
                 "row_count": len(rows_as_dicts),
                 "columns": columns,
+                "column_types": column_types,
                 "message": f"{query_type} operation completed successfully",
                 "original_query": sql_query,
                 "translated_query": sql_query
@@ -1904,12 +1915,21 @@ class ConsoleService:
         elif isinstance(value, (int, float, str, bool, type(None))):
             # Already JSON serializable
             return value
-        elif hasattr(value, '__str__'):
-            # Convert to string
-            return str(value)
         else:
-            # Fallback - convert to string representation
-            return repr(value)
+            # Handle datetime objects
+            from datetime import datetime, date, time
+            if isinstance(value, datetime):
+                return value.strftime('%Y-%m-%d %H:%M:%S')
+            elif isinstance(value, date):
+                return value.strftime('%Y-%m-%d')
+            elif isinstance(value, time):
+                return value.strftime('%H:%M:%S')
+            elif hasattr(value, '__str__'):
+                # Convert to string
+                return str(value)
+            else:
+                # Fallback - convert to string representation
+                return repr(value)
 
     def _has_where_clause_on_encrypted_columns(self, sql_query: str, metadata: Dict[str, Any]) -> bool:
         """Check if SELECT query has WHERE clause on encrypted columns"""
