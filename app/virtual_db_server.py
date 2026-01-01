@@ -826,8 +826,24 @@ class VDSInstance:
         query_upper = query.strip().upper()
         
         if "DATABASES" in query_upper:
-             result = {"success": True, "query_type": "SELECT", "columns": ["Database"], "rows": [["encrypted_db"]]}
-             return self._build_mysql_result_set_packets(result, sequence_number)
+             try:
+                 logger.info("Handling SHOW DATABASES command")
+                 result = {
+                     "success": True, 
+                     "query_type": "SELECT", 
+                     "columns": ["Database"], 
+                     "rows": [["encrypted_db"]],
+                     "column_types": {}  # Add empty column_types to avoid warnings
+                 }
+                 logger.info(f"SHOW DATABASES result: {result}")
+                 packets = self._build_mysql_result_set_packets(result, sequence_number)
+                 logger.info(f"Built {len(packets)} packets for SHOW DATABASES")
+                 return packets
+             except Exception as e:
+                 logger.error(f"Error handling SHOW DATABASES: {e}")
+                 import traceback
+                 logger.error(traceback.format_exc())
+                 return [self._build_mysql_error_packet(f"Error: {str(e)}")]
         
         if "TABLES" in query_upper:
              try:
@@ -1793,26 +1809,42 @@ class VDSInstance:
                     # Log the conversion
                     logger.debug(f"   {col_name}: {value!r} → {typed_value!r} (type={type(typed_value).__name__}, mysql_type=0x{mysql_type_code:02x if mysql_type_code else 0:02x})")
                     
+                    # Handle None after decryption
+                    if typed_value is None:
+                        packet += b'\xfb'
+                        logger.debug(f"   {col_name}: NULL after decryption")
+                        continue
+                    
+                    # Convert to string based on type
+                    str_value = None
                     if isinstance(typed_value, datetime):
                         str_value = typed_value.strftime('%Y-%m-%d %H:%M:%S')
                     elif isinstance(typed_value, date):
                         str_value = typed_value.strftime('%Y-%m-%d')
                     elif isinstance(typed_value, time):
                         str_value = typed_value.strftime('%H:%M:%S')
-                    elif typed_value is None:
-                        packet += b'\xfb'
-                        continue
                     elif isinstance(typed_value, (bytes, bytearray)):
-                        # If it's still bytes after conversion, we should send it as-is (binary)
-                        # but MySQL text protocol expects string representation for many types.
-                        # For VARCHAR/TEXT it should be the raw data.
+                        # Binary data - send as-is
                         packet += self._encode_length_encoded_int(len(typed_value)) + bytes(typed_value)
                         continue
                     else:
+                        # Convert to string
                         str_value = str(typed_value)
-
-                    encoded = str_value.encode('utf-8')
-                    packet += self._encode_length_encoded_int(len(encoded)) + encoded
+                    
+                    # Validate str_value is not None
+                    if str_value is None:
+                        logger.error(f"   ❌ str_value is None for {col_name}! typed_value={typed_value!r}, type={type(typed_value)}")
+                        # Fallback to empty string
+                        str_value = ""
+                    
+                    # Encode and add to packet
+                    try:
+                        encoded = str_value.encode('utf-8')
+                        packet += self._encode_length_encoded_int(len(encoded)) + encoded
+                    except AttributeError as e:
+                        logger.error(f"   ❌ Failed to encode {col_name}: str_value={str_value!r}, error={e}")
+                        # Send as NULL
+                        packet += b'\xfb'
 
             packet_length = len(packet)
             header = struct.pack('<I', packet_length)[:3] + bytes([sequence_number])
