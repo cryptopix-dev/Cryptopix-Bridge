@@ -168,6 +168,39 @@ OK_PACKET = 0x00
 ERR_PACKET = 0xff
 EOF_PACKET = 0xfe
 
+# MySQL Field Types (for column definitions)
+MYSQL_TYPE_DECIMAL = 0x00
+MYSQL_TYPE_TINY = 0x01
+MYSQL_TYPE_SHORT = 0x02
+MYSQL_TYPE_LONG = 0x03
+MYSQL_TYPE_FLOAT = 0x04
+MYSQL_TYPE_DOUBLE = 0x05
+MYSQL_TYPE_NULL = 0x06
+MYSQL_TYPE_TIMESTAMP = 0x07
+MYSQL_TYPE_LONGLONG = 0x08
+MYSQL_TYPE_INT24 = 0x09
+MYSQL_TYPE_DATE = 0x0a
+MYSQL_TYPE_TIME = 0x0b
+MYSQL_TYPE_DATETIME = 0x0c
+MYSQL_TYPE_YEAR = 0x0d
+MYSQL_TYPE_NEWDATE = 0x0e
+MYSQL_TYPE_VARCHAR = 0x0f
+MYSQL_TYPE_BIT = 0x10
+MYSQL_TYPE_TIMESTAMP2 = 0x11
+MYSQL_TYPE_DATETIME2 = 0x12
+MYSQL_TYPE_TIME2 = 0x13
+MYSQL_TYPE_JSON = 0xf5
+MYSQL_TYPE_NEWDECIMAL = 0xf6
+MYSQL_TYPE_ENUM = 0xf7
+MYSQL_TYPE_SET = 0xf8
+MYSQL_TYPE_TINY_BLOB = 0xf9
+MYSQL_TYPE_MEDIUM_BLOB = 0xfa
+MYSQL_TYPE_LONG_BLOB = 0xfb
+MYSQL_TYPE_BLOB = 0xfc
+MYSQL_TYPE_VAR_STRING = 0xfd
+MYSQL_TYPE_STRING = 0xfe
+MYSQL_TYPE_GEOMETRY = 0xff
+
 
 class VDSInstance:
     """
@@ -768,6 +801,20 @@ class VDSInstance:
             )
             result["processed_by"] = f"VDS_Instance_{self.host}_{self.port}"
             result["connection_id"] = connection_id
+            
+            # Extract table name for column metadata lookup
+            table_name = self._extract_table_name(query)
+            if table_name:
+                result["table_name"] = table_name
+                logger.debug(f"Extracted table name: {table_name} from query")
+                
+                # Fetch column metadata and add MySQL type codes to result
+                if result.get("success") and result.get("query_type") == "SELECT" and result.get("columns"):
+                    column_types = self._get_mysql_column_types(table_name, result.get("columns", []))
+                    if column_types:
+                        result["column_types"] = column_types
+                        logger.debug(f"Added column types for {table_name}: {column_types}")
+            
             return result
         except Exception as e:
             logger.error(f"Error executing query: {e}")
@@ -785,6 +832,214 @@ class VDSInstance:
         except Exception as e:
             logger.error(f"Error handling DDL query: {e}")
             return [self._build_mysql_error_packet(str(e))]
+
+    def _extract_table_name(self, query: str) -> Optional[str]:
+        """Extract table name from SQL query"""
+        import re
+
+        # For SHOW TABLES and similar commands, return a dummy table name
+        query_upper = query.strip().upper()
+        if query_upper.startswith(('SHOW', 'DESCRIBE', 'EXPLAIN')):
+            return "system_tables"  # Dummy table name for system queries
+
+        # Try different patterns
+        patterns = [
+            r'\bFROM\s+(\w+)',
+            r'\bINSERT\s+INTO\s+(\w+)',
+            r'\bUPDATE\s+(\w+)',
+            r'\bDELETE\s+FROM\s+(\w+)',
+            r'\bCREATE\s+TABLE\s+(\w+)',
+            r'\bALTER\s+TABLE\s+(\w+)',
+            r'\bDROP\s+TABLE\s+(\w+)'
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, query, re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+        return None
+
+
+    def _get_mysql_column_types(self, table_name: str, columns: List[str]) -> Dict[str, int]:
+        """
+        Fetch column metadata from MIGRATION STATE (original schema) and convert to MySQL type codes.
+        
+        IMPORTANT: We fetch from migration_state, NOT the encrypted database, because:
+        - Encrypted DB has encrypted column names (encrypted_col_1, encrypted_col_2, etc.)
+        - Encrypted DB stores everything as BLOB/LONGBLOB
+        - Migration state has the ORIGINAL column names and types from source schema
+        """
+        try:
+            result_column_types = {}
+            
+            # First, try to get types from migration state (preferred method)
+            if self.migration_state and 'tables' in self.migration_state:
+                table_info = self.migration_state['tables'].get(table_name)
+                
+                if table_info and 'columns' in table_info:
+                    for col_name in columns:
+                        # Skip tag columns
+                        if col_name.startswith('tag_'):
+                            continue
+                            
+                        col_info = table_info['columns'].get(col_name)
+                        if col_info and 'type' in col_info:
+                            # Convert the original type string to MySQL type code
+                            mysql_type = self._parse_type_string_to_mysql_type(col_info['type'])
+                            result_column_types[col_name] = mysql_type
+                            logger.debug(f"Column {col_name}: {col_info['type']} -> MySQL type {mysql_type}")
+                        else:
+                            result_column_types[col_name] = MYSQL_TYPE_VAR_STRING
+                    
+                    if result_column_types:
+                        logger.info(f"Fetched {len(result_column_types)} column types from migration state for {table_name}")
+                        return result_column_types
+            
+            # Fallback: Try table_mappings if migration_state doesn't have the info
+            if hasattr(self, 'table_mappings') and self.table_mappings:
+                table_mapping = self.table_mappings.get(table_name)
+                if table_mapping and hasattr(table_mapping, 'encrypted_columns'):
+                    for col_name in columns:
+                        if col_name.startswith('tag_'):
+                            continue
+                            
+                        # Check encrypted columns
+                        if col_name in table_mapping.encrypted_columns:
+                            col_mapping = table_mapping.encrypted_columns[col_name]
+                            if hasattr(col_mapping, 'data_type'):
+                                mysql_type = self._parse_type_string_to_mysql_type(col_mapping.data_type)
+                                result_column_types[col_name] = mysql_type
+                        # Check non-encrypted columns
+                        elif col_name in table_mapping.non_encrypted_columns:
+                            # For non-encrypted, we can query the encrypted DB safely
+                            result_column_types[col_name] = MYSQL_TYPE_VAR_STRING  # Default
+                        else:
+                            result_column_types[col_name] = MYSQL_TYPE_VAR_STRING
+                    
+                    if result_column_types:
+                        logger.info(f"Fetched {len(result_column_types)} column types from table_mappings for {table_name}")
+                        return result_column_types
+            
+            # Last resort: Default all to VAR_STRING
+            logger.warning(f"No type metadata found for {table_name}, defaulting all columns to VAR_STRING")
+            for col_name in columns:
+                if not col_name.startswith('tag_'):
+                    result_column_types[col_name] = MYSQL_TYPE_VAR_STRING
+            
+            return result_column_types
+            
+        except Exception as e:
+            logger.error(f"Error fetching column types for {table_name}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            # Return defaults on error
+            return {col: MYSQL_TYPE_VAR_STRING for col in columns if not col.startswith('tag_')}
+    
+    def _sqlalchemy_type_to_mysql_type(self, sqlalchemy_type) -> int:
+        """Convert SQLAlchemy type to MySQL protocol type code"""
+        from sqlalchemy import types as sqltypes
+        
+        type_str = str(sqlalchemy_type).upper()
+        
+        if isinstance(sqlalchemy_type, sqltypes.BigInteger):
+            return MYSQL_TYPE_LONGLONG
+        elif isinstance(sqlalchemy_type, sqltypes.Integer):
+            return MYSQL_TYPE_LONG
+        elif isinstance(sqlalchemy_type, sqltypes.SmallInteger):
+            return MYSQL_TYPE_SHORT
+        elif isinstance(sqlalchemy_type, sqltypes.Boolean) or 'TINYINT' in type_str:
+            return MYSQL_TYPE_TINY
+        elif isinstance(sqlalchemy_type, sqltypes.Numeric) or 'DECIMAL' in type_str:
+            return MYSQL_TYPE_NEWDECIMAL
+        elif isinstance(sqlalchemy_type, (sqltypes.Float, sqltypes.REAL)):
+            return MYSQL_TYPE_DOUBLE if 'DOUBLE' in type_str else MYSQL_TYPE_FLOAT
+        elif isinstance(sqlalchemy_type, sqltypes.DateTime) or 'DATETIME' in type_str:
+            return MYSQL_TYPE_DATETIME
+        elif isinstance(sqlalchemy_type, sqltypes.Date) or 'DATE' in type_str:
+            return MYSQL_TYPE_DATE
+        elif isinstance(sqlalchemy_type, sqltypes.Time) or 'TIME' in type_str:
+            return MYSQL_TYPE_TIME
+        elif isinstance(sqlalchemy_type, sqltypes.TIMESTAMP) or 'TIMESTAMP' in type_str:
+            return MYSQL_TYPE_TIMESTAMP
+        elif isinstance(sqlalchemy_type, sqltypes.Text):
+            return MYSQL_TYPE_BLOB
+        elif isinstance(sqlalchemy_type, (sqltypes.LargeBinary, sqltypes.BINARY)):
+            return MYSQL_TYPE_BLOB
+        elif 'JSON' in type_str:
+            return MYSQL_TYPE_JSON
+        else:
+            return MYSQL_TYPE_VAR_STRING
+
+    def _parse_type_string_to_mysql_type(self, type_string: str) -> int:
+        """
+        Parse a type string from migration state and convert to MySQL type code.
+        
+        Handles type strings like:
+        - 'INTEGER', 'INT', 'BIGINT', 'SMALLINT', 'TINYINT'
+        - 'VARCHAR(255)', 'CHAR(10)', 'TEXT'
+        - 'DECIMAL(10,2)', 'NUMERIC(8,2)', 'FLOAT', 'DOUBLE'
+        - 'DATE', 'DATETIME', 'TIMESTAMP', 'TIME'
+        - 'BLOB', 'LONGBLOB', 'JSON'
+        """
+        if not type_string:
+            return MYSQL_TYPE_VAR_STRING
+        
+        # Convert to uppercase and remove size specifications for matching
+        type_upper = type_string.upper().split('(')[0].strip()
+        
+        # Integer types
+        if type_upper in ('BIGINT', 'BIGINTEGER'):
+            return MYSQL_TYPE_LONGLONG
+        elif type_upper in ('INTEGER', 'INT'):
+            return MYSQL_TYPE_LONG
+        elif type_upper == 'SMALLINT':
+            return MYSQL_TYPE_SHORT
+        elif type_upper in ('TINYINT', 'BOOLEAN', 'BOOL'):
+            return MYSQL_TYPE_TINY
+        
+        # Decimal/Numeric types
+        elif type_upper in ('DECIMAL', 'NUMERIC', 'DEC'):
+            return MYSQL_TYPE_NEWDECIMAL
+        
+        # Float types
+        elif type_upper == 'DOUBLE':
+            return MYSQL_TYPE_DOUBLE
+        elif type_upper in ('FLOAT', 'REAL'):
+            return MYSQL_TYPE_FLOAT
+        
+        # Date/Time types
+        elif type_upper == 'DATETIME':
+            return MYSQL_TYPE_DATETIME
+        elif type_upper == 'DATE':
+            return MYSQL_TYPE_DATE
+        elif type_upper == 'TIME':
+            return MYSQL_TYPE_TIME
+        elif type_upper == 'TIMESTAMP':
+            return MYSQL_TYPE_TIMESTAMP
+        
+        # String types
+        elif type_upper in ('VARCHAR', 'NVARCHAR'):
+            return MYSQL_TYPE_VAR_STRING
+        elif type_upper in ('CHAR', 'NCHAR'):
+            return MYSQL_TYPE_STRING
+        elif type_upper in ('TEXT', 'TINYTEXT', 'MEDIUMTEXT', 'LONGTEXT'):
+            return MYSQL_TYPE_BLOB
+        
+        # Binary types
+        elif type_upper in ('BLOB', 'TINYBLOB', 'MEDIUMBLOB', 'LONGBLOB', 'BINARY', 'VARBINARY'):
+            return MYSQL_TYPE_BLOB
+        
+        # JSON type
+        elif type_upper == 'JSON':
+            return MYSQL_TYPE_JSON
+        
+        # Default to VAR_STRING for unknown types
+        else:
+            logger.debug(f"Unknown type string '{type_string}', defaulting to VAR_STRING")
+            return MYSQL_TYPE_VAR_STRING
+
+
 
     def _handle_show_mysql_command(self, query: str, sequence_number: int) -> List[bytes]:
         """Handle SHOW commands"""
@@ -1475,6 +1730,8 @@ class VDSInstance:
             header = struct.pack('<I', packet_length)[
                 :3] + bytes([sequence_number])
 
+            logger.info(
+                f"VDS COLUMN DEF: '{column_name}' -> Type: {col_type} (0x{col_type:02x})")
             logger.debug(
                 f"Built column def for '{column_name}': type={col_type}, length={packet_length}")
             return header + packet
@@ -1554,7 +1811,7 @@ class VDSInstance:
             if isinstance(value, (int, float, bool)):
                 return value
 
-                return ""
+
 
             # If value is None, return empty string
             if value is None:
@@ -1602,10 +1859,11 @@ class VDSInstance:
                 f"VDS DECRYPT: Critical error processing {col_name}: {e}")
             return f"<ERROR:{str(e)}>"
 
-    def _build_mysql_data_row_packet(self, row: Dict[str, Any], columns: List[str], sequence_number: int) -> bytes:
-        """Build data row packet with advanced decryption support using console service logic"""
+    def _build_mysql_data_row_packet(self, row: Dict[str, Any], columns: List[str], sequence_number: int, column_types: Dict[str, int] = None) -> bytes:
+        """Build data row packet with proper type preservation based on column metadata"""
         try:
             packet = b""
+            column_types = column_types or {}
 
             for col_name in columns:
                 value = row.get(col_name, None)
@@ -1615,23 +1873,17 @@ class VDSInstance:
                     # NULL is represented as 0xFB (251) in MySQL protocol
                     packet += b'\xfb'
                 else:
-                    # Use the same decryption logic as console service for consistency
-                    # _decrypt_value_for_vds now returns Any (int, float, bytes, str)
+                    # Decrypt the value first
                     decrypted_val = self._decrypt_value_for_vds(col_name, value)
 
-                    if isinstance(decrypted_val, bytes):
-                        # Already binary/bytes, pass directly
-                        final_bytes = decrypted_val
-                    else:
-                        # Convert number/string to utf-8 encoded bytes
-                        final_bytes = str(decrypted_val).encode('utf-8')
+                    # Convert to proper type based on column metadata
+                    final_bytes = self._convert_value_to_mysql_bytes(decrypted_val, col_name, column_types.get(col_name))
 
                     # Length-encoded: proper encoding for any length
                     packet += self._encode_length_encoded_int(len(final_bytes)) + final_bytes
 
             packet_length = len(packet)
-            header = struct.pack('<I', packet_length)[
-                :3] + bytes([sequence_number])
+            header = struct.pack('<I', packet_length)[:3] + bytes([sequence_number])
 
             logger.debug(
                 f"Built data row packet: seq={sequence_number}, content_length={packet_length}")
@@ -1642,6 +1894,135 @@ class VDSInstance:
             import traceback
             logger.error(traceback.format_exc())
             return b""
+
+    def _convert_value_to_mysql_bytes(self, value: Any, col_name: str, mysql_type_code: int = None) -> bytes:
+        """
+        Convert a Python value to MySQL wire protocol bytes, preserving the correct data type.
+        
+        Args:
+            value: The decrypted Python value (int, float, str, date, etc.)
+            col_name: Column name (for logging)
+            mysql_type_code: MySQL type code from cursor.description (if available)
+            
+        Returns:
+            bytes: The value encoded as bytes in the format expected by MySQL clients
+        """
+        try:
+            import datetime
+            import decimal
+            
+            # If we have type information from the database, use it
+            if mysql_type_code is not None:
+                # MySQL type codes (from pymysql.constants.FIELD_TYPE)
+                # DECIMAL = 0x00, TINY = 0x01, SHORT = 0x02, LONG = 0x03
+                # FLOAT = 0x04, DOUBLE = 0x05, NULL = 0x06, TIMESTAMP = 0x07
+                # LONGLONG = 0x08, INT24 = 0x09, DATE = 0x0a, TIME = 0x0b
+                # DATETIME = 0x0c, YEAR = 0x0d, NEWDATE = 0x0e, VARCHAR = 0x0f
+                # BIT = 0x10, NEWDECIMAL = 0xf6, ENUM = 0xf7, SET = 0xf8
+                # TINY_BLOB = 0xf9, MEDIUM_BLOB = 0xfa, LONG_BLOB = 0xfb
+                # BLOB = 0xfc, VAR_STRING = 0xfd, STRING = 0xfe, GEOMETRY = 0xff
+                
+                # Integer types
+                if mysql_type_code in (0x01, 0x02, 0x03, 0x08, 0x09, 0x0d):  # TINY, SHORT, LONG, LONGLONG, INT24, YEAR
+                    try:
+                        # Convert to integer if it's a string representation
+                        if isinstance(value, str):
+                            int_val = int(value)
+                            return str(int_val).encode('utf-8')
+                        elif isinstance(value, (int, bool)):
+                            return str(int(value)).encode('utf-8')
+                        elif isinstance(value, float):
+                            return str(int(value)).encode('utf-8')
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Float/Double types
+                elif mysql_type_code in (0x04, 0x05):  # FLOAT, DOUBLE
+                    try:
+                        if isinstance(value, str):
+                            float_val = float(value)
+                            return str(float_val).encode('utf-8')
+                        elif isinstance(value, (int, float)):
+                            return str(float(value)).encode('utf-8')
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Decimal types
+                elif mysql_type_code in (0x00, 0xf6):  # DECIMAL, NEWDECIMAL
+                    try:
+                        if isinstance(value, str):
+                            # Keep as string to preserve precision
+                            return value.encode('utf-8')
+                        elif isinstance(value, (int, float, decimal.Decimal)):
+                            return str(value).encode('utf-8')
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Date/Time types
+                elif mysql_type_code in (0x07, 0x0a, 0x0b, 0x0c, 0x0e):  # TIMESTAMP, DATE, TIME, DATETIME, NEWDATE
+                    if isinstance(value, (datetime.date, datetime.datetime, datetime.time)):
+                        return str(value).encode('utf-8')
+                    elif isinstance(value, str):
+                        # Already a string, just encode
+                        return value.encode('utf-8')
+            
+            # Fallback: Intelligent type detection based on Python type
+            if isinstance(value, bool):
+                # Boolean: convert to '1' or '0'
+                return b'1' if value else b'0'
+            
+            elif isinstance(value, int):
+                # Integer: keep as integer string
+                return str(value).encode('utf-8')
+            
+            elif isinstance(value, float):
+                # Float: keep as float string
+                return str(value).encode('utf-8')
+            
+            elif isinstance(value, decimal.Decimal):
+                # Decimal: keep as decimal string
+                return str(value).encode('utf-8')
+            
+            elif isinstance(value, (datetime.date, datetime.datetime, datetime.time)):
+                # Date/Time: convert to ISO format string
+                return str(value).encode('utf-8')
+            
+            elif isinstance(value, bytes):
+                # Already bytes, return as-is
+                return value
+            
+            elif isinstance(value, str):
+                # String: try to detect if it's a numeric string and preserve type
+                # This handles cases where decryption returns "123" but it should be an integer
+                
+                # Try integer
+                try:
+                    int_val = int(value)
+                    # Check if it's a clean integer (no decimal point)
+                    if '.' not in value and 'e' not in value.lower():
+                        return str(int_val).encode('utf-8')
+                except ValueError:
+                    pass
+                
+                # Try float
+                try:
+                    float_val = float(value)
+                    if '.' in value or 'e' in value.lower():
+                        return str(float_val).encode('utf-8')
+                except ValueError:
+                    pass
+                
+                # Regular string
+                return value.encode('utf-8')
+            
+            else:
+                # Unknown type: convert to string
+                return str(value).encode('utf-8')
+                
+        except Exception as e:
+            logger.warning(f"Error converting value for column {col_name}: {e}, falling back to string")
+            # Fallback: always convert to string
+            return str(value).encode('utf-8')
 
     # BINARY PROTOCOL SUPPORT FOR PREPARED STATEMENTS
     def _build_mysql_binary_result_set_packets(self, result: Dict[str, Any], start_sequence: int) -> List[bytes]:
@@ -2010,6 +2391,7 @@ class VDSInstance:
             sequence = start_sequence
             columns = result.get("columns", [])
             rows = result.get("rows", [])
+            column_types = result.get("column_types", {})  # Extract column type metadata
             
             col_count_packet = struct.pack('<B', len(columns))
             header = struct.pack('<I', len(col_count_packet))[:3] + bytes([sequence])
@@ -2025,7 +2407,8 @@ class VDSInstance:
             sequence = (sequence + 1) % 256
             
             for row in rows:
-                row_packet = self._build_mysql_data_row_packet(row, columns, sequence)
+                # Pass column_types to preserve data types
+                row_packet = self._build_mysql_data_row_packet(row, columns, sequence, column_types)
                 packets += row_packet
                 sequence = (sequence + 1) % 256
                 
@@ -2109,28 +2492,109 @@ class VDSInstance:
             logger.error(traceback.format_exc())
             return b""
 
-    def _build_mysql_data_row_packet(self, row: Any, columns: List[str], sequence_number: int) -> bytes:
+    def _build_mysql_data_row_packet(self, row: Any, columns: List[str], sequence_number: int, column_types: Dict[str, int] = None) -> bytes:
+        """Build data row packet with proper type preservation based on column metadata"""
         try:
             packet = b""
             row_dict = {}
-            if isinstance(row, dict): row_dict = row
-            elif isinstance(row, (list, tuple)): row_dict = dict(zip(columns, row))
+            column_types = column_types or {}
+            
+            if isinstance(row, dict): 
+                row_dict = row
+            elif isinstance(row, (list, tuple)): 
+                row_dict = dict(zip(columns, row))
                 
             for col_name in columns:
                 value = row_dict.get(col_name)
-                if value is None: packet += b'\xfb'
+                if value is None: 
+                    packet += b'\xfb'
                 else:
-                    str_value = self._decrypt_value_for_vds(col_name, value)
-                    encoded = str_value.encode('utf-8')
-                    if len(encoded) < 251: packet += bytes([len(encoded)]) + encoded
-                    else: packet += bytes([250]) + encoded[:250]
+                    # Decrypt the value first
+                    decrypted_val = self._decrypt_value_for_vds(col_name, value)
+                    
+                    # Convert to proper type based on column metadata
+                    final_bytes = self._convert_value_to_mysql_bytes(decrypted_val, col_name, column_types.get(col_name))
+                    
+                    # Length-encoded: proper encoding for any length
+                    if len(final_bytes) < 251: 
+                        packet += bytes([len(final_bytes)]) + final_bytes
+                    else: 
+                        packet += self._encode_length_encoded_int(len(final_bytes)) + final_bytes
                         
             packet_length = len(packet)
             header = struct.pack('<I', packet_length)[:3] + bytes([sequence_number])
             return header + packet
         except Exception as e:
             logger.error(f"Error building data row: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return b""
+    def _convert_value_to_mysql_bytes(self, value: Any, col_name: str, mysql_type_code: int = None) -> bytes:
+        """Convert a Python value to MySQL wire protocol bytes, preserving the correct data type."""
+        try:
+            import datetime
+            import decimal
+            
+            # If we have type information from the database, use it
+            if mysql_type_code is not None:
+                # Integer types
+                if mysql_type_code in (0x01, 0x02, 0x03, 0x08, 0x09, 0x0d):
+                    try:
+                        if isinstance(value, str):
+                            return str(int(value)).encode('utf-8')
+                        elif isinstance(value, (int, bool)):
+                            return str(int(value)).encode('utf-8')
+                        elif isinstance(value, float):
+                            return str(int(value)).encode('utf-8')
+                    except (ValueError, TypeError):
+                        pass
+                # Float/Double types
+                elif mysql_type_code in (0x04, 0x05):
+                    try:
+                        if isinstance(value, str):
+                            return str(float(value)).encode('utf-8')
+                        elif isinstance(value, (int, float)):
+                            return str(float(value)).encode('utf-8')
+                    except (ValueError, TypeError):
+                        pass
+                # Decimal types
+                elif mysql_type_code in (0x00, 0xf6):
+                    try:
+                        return str(value).encode('utf-8')
+                    except (ValueError, TypeError):
+                        pass
+                # Date/Time types
+                elif mysql_type_code in (0x07, 0x0a, 0x0b, 0x0c, 0x0e):
+                    return str(value).encode('utf-8')
+            
+            # Fallback: Intelligent type detection
+            if isinstance(value, bool):
+                return b'1' if value else b'0'
+            elif isinstance(value, int):
+                return str(value).encode('utf-8')
+            elif isinstance(value, float):
+                return str(value).encode('utf-8')
+            elif isinstance(value, decimal.Decimal):
+                return str(value).encode('utf-8')
+            elif isinstance(value, (datetime.date, datetime.datetime, datetime.time)):
+                return str(value).encode('utf-8')
+            elif isinstance(value, bytes):
+                return value
+            elif isinstance(value, str):
+                # Try to detect numeric strings
+                try:
+                    if '.' not in value and 'e' not in value.lower():
+                        int(value)  # Validate it's an integer
+                        return value.encode('utf-8')
+                except ValueError:
+                    pass
+                return value.encode('utf-8')
+            else:
+                return str(value).encode('utf-8')
+        except Exception as e:
+            logger.warning(f"Error converting value for column {col_name}: {e}")
+            return str(value).encode('utf-8')
+
 
     def _build_mysql_eof_packet(self, sequence_number: int) -> bytes:
         # EOF packet structure: 0xFE + warnings (2 bytes) + status flags (2 bytes)
@@ -4031,16 +4495,34 @@ class VirtualDatabaseServer:
                         self._build_mysql_ok_packet(sequence_number))
                     return packets
 
+                # Try to get column metadata from the table
+                table_name = result.get("table_name")
+                if not table_name and result.get("metadata"):
+                    table_name = result.get("metadata", {}).get("table_name")
+                
+                column_metadata = {}
+                
+                if table_name:
+                    # Use migration state to get ORIGINAL column types, ensuring correct data types for clients
+                    try:
+                        column_metadata = self._get_mysql_column_types(table_name, columns)
+                        logger.info(f"Retrieved original schema types for {len(column_metadata)} columns in {table_name}")
+                    except Exception as meta_err:
+                        logger.warning(f"Failed to get original types for {table_name}: {meta_err}")
+                        # Fallback to physical schema
+                        column_metadata = self._get_column_metadata(table_name)
+
                 # Column count packet
                 column_count_packet = self._build_mysql_column_count_packet(
                     len(columns), sequence_number)
                 packets.append(column_count_packet)
                 sequence_number = (sequence_number + 1) % 256
 
-                # Column definition packets
+                # Column definition packets with type information
                 for col_name in columns:
+                    column_type = column_metadata.get(col_name) if column_metadata else None
                     col_def_packet = self._build_mysql_column_definition_packet(
-                        col_name, sequence_number)
+                        col_name, sequence_number, column_type)
                     packets.append(col_def_packet)
                     sequence_number = (sequence_number + 1) % 256
 
@@ -4049,10 +4531,10 @@ class VirtualDatabaseServer:
                 packets.append(eof_packet)
                 sequence_number = (sequence_number + 1) % 256
 
-                # Data row packets
+                # Data row packets with type-aware encoding
                 for row in rows:
                     row_packet = self._build_mysql_data_row_packet(
-                        row, columns, sequence_number)
+                        row, columns, sequence_number, column_metadata)
                     packets.append(row_packet)
                     sequence_number = (sequence_number + 1) % 256
 
@@ -4078,8 +4560,8 @@ class VirtualDatabaseServer:
             :3] + bytes([sequence_number])
         return header + packet
 
-    def _build_mysql_column_definition_packet(self, column_name: str, sequence_number: int) -> bytes:
-        """Build column definition packet"""
+    def _build_mysql_column_definition_packet(self, column_name: str, sequence_number: int, column_type=None) -> bytes:
+        """Build column definition packet with proper type information"""
         try:
             packet = b""
 
@@ -4107,17 +4589,41 @@ class VirtualDatabaseServer:
             # Character set (2 bytes)
             packet += struct.pack('<H', MYSQL_DEFAULT_CHARSET)
 
-            # Column length (4 bytes)
-            packet += struct.pack('<I', 255)  # Default length
+            # Column length (4 bytes) - will be set based on type
+            mysql_type_code = MYSQL_TYPE_VAR_STRING  # Default
+            column_length = 255
+            decimals = 0
+            
+            if column_type:
+                # If column_type is already an integer (MySQL type code), use it directly
+                if isinstance(column_type, int):
+                    mysql_type_code = column_type
+                    # Set reasonable defaults based on type code if possible
+                    if mysql_type_code in (MYSQL_TYPE_TINY, MYSQL_TYPE_SHORT, MYSQL_TYPE_LONG, MYSQL_TYPE_LONGLONG, MYSQL_TYPE_INT24):
+                        column_length = 20
+                        decimals = 0
+                    elif mysql_type_code in (MYSQL_TYPE_FLOAT, MYSQL_TYPE_DOUBLE, MYSQL_TYPE_NEWDECIMAL):
+                        column_length = 20
+                        decimals = 20 
+                    elif mysql_type_code in (MYSQL_TYPE_DATE, MYSQL_TYPE_NEWDATE):
+                        column_length = 10
+                    elif mysql_type_code in (MYSQL_TYPE_DATETIME, MYSQL_TYPE_TIMESTAMP):
+                        column_length = 19
+                    else:
+                        column_length = 255
+                else:
+                    mysql_type_code, column_length, decimals = self._get_mysql_type_info(column_type)
+            
+            packet += struct.pack('<I', column_length)
 
-            # Column type (1 byte) - VARCHAR
-            packet += b'\xfd'  # MYSQL_TYPE_VAR_STRING
+            # Column type (1 byte)
+            packet += bytes([mysql_type_code])
 
             # Flags (2 bytes)
             packet += struct.pack('<H', 0)
 
             # Decimals (1 byte)
-            packet += b'\x00'
+            packet += bytes([decimals])
 
             # Filler (2 bytes)
             packet += b'\x00\x00'
@@ -4131,20 +4637,235 @@ class VirtualDatabaseServer:
             logger.error(f"Error building column definition packet: {e}")
             return b""
 
-    def _decrypt_value_for_vds(self, col_name: str, value: Any) -> str:
+    def _get_mysql_type_info(self, column_type) -> Tuple[int, int, int]:
+        """
+        Map SQLAlchemy column type to MySQL type code, length, and decimals
+        Returns: (type_code, column_length, decimals)
+        """
+        from sqlalchemy import types as sqltypes
+        from decimal import Decimal
+        
+        type_str = str(column_type).upper()
+        
+        # Integer types
+        if isinstance(column_type, sqltypes.BigInteger) or 'BIGINT' in type_str:
+            return (MYSQL_TYPE_LONGLONG, 20, 0)
+        elif isinstance(column_type, sqltypes.Integer) or 'INT' in type_str:
+            return (MYSQL_TYPE_LONG, 11, 0)
+        elif isinstance(column_type, sqltypes.SmallInteger) or 'SMALLINT' in type_str:
+            return (MYSQL_TYPE_SHORT, 6, 0)
+        elif isinstance(column_type, sqltypes.Boolean) or 'BOOL' in type_str or 'TINYINT(1)' in type_str:
+            return (MYSQL_TYPE_TINY, 1, 0)
+        
+        # Decimal/Numeric types
+        elif isinstance(column_type, sqltypes.Numeric):
+            precision = getattr(column_type, 'precision', 10)
+            scale = getattr(column_type, 'scale', 2)
+            return (MYSQL_TYPE_NEWDECIMAL, precision, scale)
+        elif 'DECIMAL' in type_str or 'NUMERIC' in type_str:
+            # Try to extract precision and scale from type string
+            import re
+            match = re.search(r'(\d+),\s*(\d+)', type_str)
+            if match:
+                precision = int(match.group(1))
+                scale = int(match.group(2))
+                return (MYSQL_TYPE_NEWDECIMAL, precision, scale)
+            return (MYSQL_TYPE_NEWDECIMAL, 10, 2)
+        
+        # Float types
+        elif isinstance(column_type, sqltypes.Float) or 'FLOAT' in type_str:
+            return (MYSQL_TYPE_FLOAT, 12, 31)
+        elif isinstance(column_type, sqltypes.REAL) or 'REAL' in type_str:
+            return (MYSQL_TYPE_DOUBLE, 22, 31)
+        
+        # Date/Time types
+        elif isinstance(column_type, sqltypes.DateTime) or 'DATETIME' in type_str:
+            return (MYSQL_TYPE_DATETIME, 19, 0)
+        elif isinstance(column_type, sqltypes.Date) or 'DATE' in type_str:
+            return (MYSQL_TYPE_DATE, 10, 0)
+        elif isinstance(column_type, sqltypes.Time) or 'TIME' in type_str:
+            return (MYSQL_TYPE_TIME, 8, 0)
+        elif isinstance(column_type, sqltypes.TIMESTAMP) or 'TIMESTAMP' in type_str:
+            return (MYSQL_TYPE_TIMESTAMP, 19, 0)
+        
+        # String types
+        elif isinstance(column_type, sqltypes.String):
+            length = getattr(column_type, 'length', 255)
+            if length and length < 256:
+                return (MYSQL_TYPE_VAR_STRING, length, 0)
+            else:
+                return (MYSQL_TYPE_VAR_STRING, 65535, 0)
+        elif isinstance(column_type, sqltypes.Text) or 'TEXT' in type_str:
+            return (MYSQL_TYPE_BLOB, 65535, 0)
+        
+        # JSON type
+        elif 'JSON' in type_str:
+            return (MYSQL_TYPE_JSON, 65535, 0)
+        
+        # Default to VARCHAR
+        else:
+            return (MYSQL_TYPE_VAR_STRING, 255, 0)
+
+    def _get_column_metadata(self, table_name: str) -> Dict[str, Any]:
+        """
+        Get column metadata from the database for type information
+        Returns a dict mapping column names to their SQLAlchemy types
+        """
+        try:
+            from sqlalchemy import create_engine, inspect
+            engine = create_engine(self.encrypted_db_url)
+            inspector = inspect(engine)
+            
+            if not inspector.has_table(table_name):
+                engine.dispose()
+                return {}
+            
+            columns = inspector.get_columns(table_name)
+            engine.dispose()
+            
+            # Build metadata dict
+            metadata = {}
+            for col in columns:
+                metadata[col['name']] = col['type']
+            
+            return metadata
+            
+        except Exception as e:
+            logger.error(f"Error getting column metadata for {table_name}: {e}")
+            return {}
+
+    def _convert_value_to_native_type(self, value: Any, column_type) -> Any:
+        """
+        Convert a decrypted string value back to its native Python type
+        based on the column's SQLAlchemy type
+        """
+        from sqlalchemy import types as sqltypes
+        from decimal import Decimal
+        from datetime import datetime, date, time
+        
+        # If value is None, return None
+        if value is None:
+            return None
+        
+        # If value is already the correct type, return it
+        if not isinstance(value, str):
+            return value
+        
+        try:
+            # Handle MySQL Protocol Type Codes (Integers)
+            if isinstance(column_type, int):
+                # Integer types
+                if column_type in (MYSQL_TYPE_TINY, MYSQL_TYPE_SHORT, MYSQL_TYPE_LONG, MYSQL_TYPE_LONGLONG, MYSQL_TYPE_INT24):
+                    try:
+                        return int(value)
+                    except (ValueError, TypeError):
+                        # Handle boolean-like strings ('true', 'false') for TINYINT
+                        if column_type == MYSQL_TYPE_TINY and isinstance(value, str):
+                            if value.lower() in ('true', 't', 'yes', 'y', 'on'): return 1
+                            if value.lower() in ('false', 'f', 'no', 'n', 'off'): return 0
+                        return 0
+                
+                # Float/Double types
+                elif column_type in (MYSQL_TYPE_FLOAT, MYSQL_TYPE_DOUBLE):
+                    return float(value)
+                
+                # Decimal types
+                elif column_type == MYSQL_TYPE_NEWDECIMAL:
+                    return Decimal(value)
+
+                # Date/Time types
+                elif column_type in (MYSQL_TYPE_DATE, MYSQL_TYPE_NEWDATE):
+                    if isinstance(value, str):
+                        try:
+                            return datetime.strptime(value, '%Y-%m-%d').date()
+                        except ValueError:
+                            pass
+                    return value
+                
+                elif column_type in (MYSQL_TYPE_DATETIME, MYSQL_TYPE_TIMESTAMP):
+                     if isinstance(value, str):
+                        for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%dT%H:%M:%S']:
+                            try:
+                                return datetime.strptime(value, fmt)
+                            except ValueError:
+                                continue
+                     return value
+
+                # Default to returning value as-is for strings/blobs/others
+                else:
+                    return value
+
+            # SQLAlchemy Types (Original Logic)
+            type_str = str(column_type).upper()
+            
+            # Integer types
+            if isinstance(column_type, (sqltypes.BigInteger, sqltypes.Integer, sqltypes.SmallInteger)):
+                return int(value)
+            
+            # Boolean
+            elif isinstance(column_type, sqltypes.Boolean):
+                if value.lower() in ('true', '1', 'yes', 't', 'y'):
+                    return True
+                elif value.lower() in ('false', '0', 'no', 'f', 'n'):
+                    return False
+                return bool(int(value))
+            
+            # Decimal/Numeric
+            elif isinstance(column_type, sqltypes.Numeric) or 'DECIMAL' in type_str or 'NUMERIC' in type_str:
+                return Decimal(value)
+            
+            # Float
+            elif isinstance(column_type, (sqltypes.Float, sqltypes.REAL)):
+                return float(value)
+            
+            # DateTime
+            elif isinstance(column_type, sqltypes.DateTime) or 'DATETIME' in type_str:
+                # Try common datetime formats
+                for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%dT%H:%M:%S']:
+                    try:
+                        return datetime.strptime(value, fmt)
+                    except ValueError:
+                        continue
+                return value  # Return as string if parsing fails
+            
+            # Date
+            elif isinstance(column_type, sqltypes.Date) or 'DATE' in type_str:
+                try:
+                    return datetime.strptime(value, '%Y-%m-%d').date()
+                except ValueError:
+                    return value
+            
+            # Time
+            elif isinstance(column_type, sqltypes.Time) or 'TIME' in type_str:
+                try:
+                    return datetime.strptime(value, '%H:%M:%S').time()
+                except ValueError:
+                    return value
+            
+            # String types - return as is
+            else:
+                return value
+                
+        except Exception as e:
+            logger.warning(f"Failed to convert value '{value}' to type {column_type}: {e}")
+            return value  # Return original value if conversion fails
+
+    def _decrypt_value_for_vds(self, col_name: str, value: Any, column_type=None) -> Any:
         """
         VDS DECRYPTION: Decrypt any encrypted data before sending to MySQL clients.
-        This ensures VDS always returns plaintext data regardless of console service processing.
+        This ensures VDS always returns plaintext data with PRESERVED DATA TYPES.
         """
         try:
             # Skip tag columns
             if col_name.startswith('tag_'):
-                return ""
-
-            # If value is None, return empty string
+                return None
+            
+            # If value is None, return None (not empty string)
             if value is None:
-                return ""
-
+                return None
+            
+            decrypted_value = value
+            
             # If value is already a string, check if it's actually encrypted hex data
             if isinstance(value, str):
                 # Check if it's a hex string that represents encrypted data
@@ -4156,15 +4877,15 @@ class VirtualDatabaseServer:
                                 f"VDS DECRYPT: Found encrypted hex WebP data in {col_name}")
                             decrypted_value = clwe_encryptor.decrypt_value(
                                 hex_bytes, settings.CRYPTOPIX_DEFAULT_PASSWORD)
-                            return str(decrypted_value)
+                            # Convert to string first, then to native type
+                            decrypted_value = str(decrypted_value)
                     except Exception as e:
                         logger.debug(
                             f"VDS DECRYPT: Hex string in {col_name} not encrypted")
-                # Otherwise, it's already decrypted
-                return value
-
+                # If not encrypted, value is already decrypted
+            
             # If value is bytes, it needs decryption
-            if isinstance(value, bytes):
+            elif isinstance(value, bytes):
                 try:
                     logger.info(
                         f"VDS DECRYPT: Decrypting bytes data in {col_name} (size: {len(value)})")
@@ -4172,20 +4893,24 @@ class VirtualDatabaseServer:
                         value, settings.CRYPTOPIX_DEFAULT_PASSWORD)
                     logger.info(
                         f"VDS DECRYPT: Successfully decrypted {col_name}")
-                    return str(decrypted_value)
+                    # Convert to string first, then to native type
+                    decrypted_value = str(decrypted_value)
                 except Exception as e:
                     logger.error(
                         f"VDS DECRYPT: Failed to decrypt bytes in {col_name}: {e}")
                     # If decryption fails, it might not be encrypted - return as hex
-                    return value.hex()
-
-            # For any other type, convert to string
-            return str(value)
-
+                    decrypted_value = value.hex()
+            
+            # Now convert the decrypted value to its native type if column_type is provided
+            if column_type and isinstance(decrypted_value, str):
+                decrypted_value = self._convert_value_to_native_type(decrypted_value, column_type)
+            
+            return decrypted_value
+        
         except Exception as e:
             logger.error(
                 f"VDS DECRYPT: Critical error processing {col_name}: {e}")
-            return f"<ERROR:{str(e)}>"
+            return None
 
     def _get_column_variations(self, col_name: str) -> List[str]:
         """Get common variations of column names for matching"""
@@ -4240,47 +4965,104 @@ class VirtualDatabaseServer:
             # Fallback - convert to string representation
             return repr(value)
 
-    def _build_mysql_data_row_packet(self, row: Dict[str, Any], columns: List[str], sequence_number: int) -> bytes:
-        """Build data row packet with advanced decryption support using console service logic"""
+    def _build_mysql_data_row_packet(self, row: Dict[str, Any], columns: List[str], sequence_number: int, column_metadata: Dict[str, Any] = None) -> bytes:
+        """Build data row packet with type-aware encoding"""
         try:
             packet = b""
-
+            
             for col_name in columns:
                 value = row.get(col_name, None)
-
+                
+                # Get column type if metadata is available
+                column_type = None
+                if column_metadata and col_name in column_metadata:
+                    column_type = column_metadata[col_name]
+                
+                # Decrypt and convert to native type
+                decrypted_value = self._decrypt_value_for_vds(col_name, value, column_type)
+                
                 # Handle NULL values
-                if value is None:
+                if decrypted_value is None:
                     # NULL is represented as 0xFB (251) in MySQL protocol
                     packet += b'\xfb'
                 else:
-                    # Use the same decryption logic as console service for consistency
-                    str_value = self._decrypt_value_for_vds(col_name, value)
-
-                    # Encode as UTF-8
-                    encoded_value = str_value.encode('utf-8')
-
-                    # Length-encoded: 1 byte length + data (for lengths < 251)
-                    if len(encoded_value) < 251:
-                        packet += bytes([len(encoded_value)]) + encoded_value
-                    else:
-                        # For longer strings, we'd need proper length encoding
-                        # For now, truncate to avoid complexity
-                        truncated = encoded_value[:250]
-                        packet += bytes([len(truncated)]) + truncated
-
+                    # Encode value based on its type
+                    encoded_value = self._encode_mysql_value(decrypted_value, column_type)
+                    packet += encoded_value
+            
             packet_length = len(packet)
             header = struct.pack('<I', packet_length)[
                 :3] + bytes([sequence_number])
-
+            
             logger.debug(
                 f"Built data row packet: seq={sequence_number}, content_length={packet_length}")
             return header + packet
-
+        
         except Exception as e:
             logger.error(f"Error building data row packet: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return b""
+
+    def _encode_mysql_value(self, value: Any, column_type=None) -> bytes:
+        """
+        Encode a Python value to MySQL wire protocol format
+        Returns length-encoded string for the value
+        """
+        from decimal import Decimal
+        from datetime import datetime, date, time
+        
+        try:
+            # Convert value to string representation for MySQL text protocol
+            if isinstance(value, bool):
+                # Boolean: 1 or 0
+                str_value = '1' if value else '0'
+            elif isinstance(value, int):
+                # Integer: convert to string
+                str_value = str(value)
+            elif isinstance(value, Decimal):
+                # Decimal: convert to string with proper precision
+                str_value = str(value)
+            elif isinstance(value, float):
+                # Float: convert to string
+                str_value = str(value)
+            elif isinstance(value, datetime):
+                # DateTime: format as 'YYYY-MM-DD HH:MM:SS'
+                str_value = value.strftime('%Y-%m-%d %H:%M:%S')
+            elif isinstance(value, date):
+                # Date: format as 'YYYY-MM-DD'
+                str_value = value.strftime('%Y-%m-%d')
+            elif isinstance(value, time):
+                # Time: format as 'HH:MM:SS'
+                str_value = value.strftime('%H:%M:%S')
+            elif isinstance(value, bytes):
+                # Bytes: convert to hex string
+                str_value = value.hex()
+            else:
+                # Everything else: convert to string
+                str_value = str(value)
+            
+            # Encode as UTF-8
+            encoded_value = str_value.encode('utf-8')
+            
+            # Length-encoded string format
+            if len(encoded_value) < 251:
+                # For lengths < 251: 1 byte length + data
+                return bytes([len(encoded_value)]) + encoded_value
+            elif len(encoded_value) < 65536:
+                # For lengths < 65536: 0xFC + 2 byte length + data
+                return b'\xfc' + struct.pack('<H', len(encoded_value)) + encoded_value
+            elif len(encoded_value) < 16777216:
+                # For lengths < 16777216: 0xFD + 3 byte length + data
+                return b'\xfd' + struct.pack('<I', len(encoded_value))[:3] + encoded_value
+            else:
+                # For larger lengths: 0xFE + 8 byte length + data
+                return b'\xfe' + struct.pack('<Q', len(encoded_value)) + encoded_value
+                
+        except Exception as e:
+            logger.error(f"Error encoding value {value}: {e}")
+            # Fallback: encode as empty string
+            return b'\x00'
 
     def _build_mysql_eof_packet(self, sequence_number: int) -> bytes:
         """Build EOF packet (simplified)"""
@@ -4365,7 +5147,9 @@ class VirtualDatabaseServer:
             from app.services.console_service import console_service
 
             # Load migration state for the console service
-            migration_state = self.migration_state or self._load_migration_state()
+            if not self.migration_state:
+                self.migration_state = self._load_migration_state()
+            migration_state = self.migration_state
 
             # Execute the query using console service (same as query console)
             result = console_service.execute_command(
@@ -4786,7 +5570,7 @@ def start_virtual_server(host: str = "0.0.0.0",
                          encrypted_db_url: str = None,
                          protocol: str = "mysql",
                          table_mappings: Dict[str, Any] = None,
-                         max_connections: int = 100) -> VirtualDatabaseServer:
+                         max_connections: int = 100) -> VDSInstance:
     """
     Start Virtual Database Server (VDS)
 
@@ -4810,7 +5594,7 @@ def start_virtual_server(host: str = "0.0.0.0",
         logger.warning("Virtual Database Server already running")
         return virtual_db_server
 
-    virtual_db_server = VirtualDatabaseServer(
+    virtual_db_server = VDSInstance(
         host=host,
         port=port,
         encrypted_db_url=encrypted_db_url,

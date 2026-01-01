@@ -53,11 +53,13 @@ app = Flask(__name__, template_folder='../templates',
             static_folder='../static')
 app.secret_key = settings.SECRET_KEY
 
-# Configure session to be permanent and last for 30 days
-app.config['PERMANENT_SESSION_LIFETIME'] = datetime.timedelta(days=30)
+# Configure session to be permanent and last until manual logout
+# Session will last for 365 days (1 year) and refresh on each request
+app.config['PERMANENT_SESSION_LIFETIME'] = datetime.timedelta(days=365)
 app.config['SESSION_COOKIE_SECURE'] = False  # Set to True if using HTTPS
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_REFRESH_EACH_REQUEST'] = True  # Refresh session on each request to keep it alive
 
 @app.context_processor
 def inject_config():
@@ -750,7 +752,7 @@ def validate_license(license_key: str) -> dict:
 
 
 def validate_token_on_load():
-    """Validate stored token on app load"""
+    """Validate stored token on app load - NEVER clears session automatically"""
     if 'license_token' in session:
         try:
             token = session['license_token']
@@ -758,20 +760,24 @@ def validate_token_on_load():
                 f"{get_api_base_url()}/me",
                 headers={
                     'Authorization': f'Bearer {token}'
-                }
+                },
+                timeout=5  # Add timeout to prevent hanging
             )
 
             if response.status_code == 200:
                 user_data = response.json()
                 session['user_info'] = user_data
+                logger.debug("Token validation successful")
                 return True
             else:
-                # Token invalid, clear session
-                session.clear()
+                # Token validation failed, but DON'T clear session
+                # Let the user stay logged in until they manually logout
+                logger.warning(f"Token validation failed with status {response.status_code}, but keeping session active")
                 return False
 
-        except requests.RequestException:
-            # Connection error, allow access but don't clear session
+        except requests.RequestException as e:
+            # Connection error, allow access and don't clear session
+            logger.warning(f"Token validation failed due to connection error: {e}, but keeping session active")
             return True
     return False
 
