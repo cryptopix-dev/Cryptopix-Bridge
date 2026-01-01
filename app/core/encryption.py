@@ -7,6 +7,7 @@ import logging
 import hashlib
 from typing import Dict, Any, Optional, Union, List
 import json
+import ast
 
 try:
     from clwe import ColorCipher
@@ -65,7 +66,7 @@ class CLWEEncryptor:
         self.default_level = settings.default_security_level or "Min"
 
     def encrypt_data(self,
-                       data: Union[str, Dict, List],
+                       data: Union[str, Dict, List, bytes],
                        password: str,
                        security_level: Optional[str] = None,
                        deterministic: bool = True) -> bytes:
@@ -73,7 +74,7 @@ class CLWEEncryptor:
         Encrypt data using CLWE and return as encrypted BLOB
 
         Args:
-            data: Data to encrypt (string, dict, or list)
+            data: Data to encrypt (string, bytes, dict, or list)
             password: Encryption password
             security_level: Security level (Min, Bal, Max)
             deterministic: Use deterministic encryption for searchable data (default: True)
@@ -90,6 +91,10 @@ class CLWEEncryptor:
             # Convert data to string
             if isinstance(data, (dict, list)):
                 data_str = json.dumps(data, separators=(',', ':'))
+            elif isinstance(data, bytes):
+                # Preserve bytes as latin-1 string (1:1 mapping)
+                # This prevents "b'...'" string representation
+                data_str = data.decode('latin-1')
             else:
                 data_str = str(data)
 
@@ -122,6 +127,8 @@ class CLWEEncryptor:
         # Convert value to string representation
         if value is None:
             value_str = ""
+        elif isinstance(value, bytes):
+            return self.encrypt_data(value, password, security_level, deterministic)
         else:
             value_str = str(value)
 
@@ -148,7 +155,7 @@ class CLWEEncryptor:
         logger.info(f"✅ Bulk encrypted {len(values)} values (deterministic: {deterministic})")
         return encrypted_blobs
 
-    def decrypt_data(self, encrypted_blob: bytes, password: str) -> str:
+    def decrypt_data(self, encrypted_blob: bytes, password: str) -> Union[str, bytes]:
         """
         Decrypt data from encrypted BLOB using CLWE
 
@@ -157,7 +164,7 @@ class CLWEEncryptor:
             password: Decryption password
 
         Returns:
-            Original decrypted data as string
+            Original decrypted data as string or bytes
         """
         try:
             # Use CLWE visual steganography decryption
@@ -165,15 +172,31 @@ class CLWEEncryptor:
             logger.info("✅ Data decrypted from WebP image successfully")
 
             # Handle different return types from CLWE library
-            if isinstance(decrypted_result, str):
-                return decrypted_result
-            elif isinstance(decrypted_result, bytes):
+            if isinstance(decrypted_result, bytes):
                 try:
+                    # Try UTF-8 first
                     return decrypted_result.decode('utf-8')
                 except UnicodeDecodeError:
-                    return decrypted_result.decode('latin-1')
-            else:
-                return str(decrypted_result)
+                    # Return bytes directly if not valid UTF-8
+                    # This preserves binary data
+                    return decrypted_result
+            
+            # If it's a string, check for accidental "b'...'" representation (Migration Fix)
+            if isinstance(decrypted_result, str):
+                if (decrypted_result.startswith("b'") and decrypted_result.endswith("'")) or \
+                   (decrypted_result.startswith('b"') and decrypted_result.endswith('"')):
+                    try:
+                        # Attempt to recover original bytes from string representation
+                        recovered_bytes = ast.literal_eval(decrypted_result)
+                        if isinstance(recovered_bytes, bytes):
+                            logger.info("🔧 Recovered raw bytes from string representation (Migration Fix)")
+                            return recovered_bytes
+                    except (ValueError, SyntaxError):
+                        pass
+                
+                return decrypted_result
+            
+            return str(decrypted_result)
 
         except Exception as e:
             logger.error(f"❌ CLWE decryption failed: {e}")

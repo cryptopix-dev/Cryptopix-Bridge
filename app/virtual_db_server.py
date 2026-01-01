@@ -1419,9 +1419,13 @@ class VDSInstance:
 
         return packets
 
-    def _build_mysql_column_definition_packet(self, column_name: str, sequence_number: int) -> bytes:
+    def _build_mysql_column_definition_packet(self, column_name: str, sequence_number: int, col_type: int = 0xfd) -> bytes:
         """Build MySQL column definition packet with simplified format"""
         try:
+            # MySQL Type Constants (for reference)
+            # MYSQL_TYPE_VAR_STRING = 0xfd
+            # MYSQL_TYPE_LONG = 0x03 (INT)
+            
             # Use a very basic format that should work with most MySQL clients
             # This is a minimal implementation that avoids complex length encoding
 
@@ -1434,15 +1438,24 @@ class VDSInstance:
             # Column name with length prefix
             name_bytes = column_name.encode('utf-8')
             name_with_len = bytes([len(name_bytes)]) + name_bytes
-
+            
+            # Determine column length based on type
+            # defaults to 16MB for strings, but should be smaller for numbers
+            column_length = 16777215
+            if col_type in [0x01, 0x02, 0x03, 0x04, 0x05, 0x08, 0x09]: # Numeric types
+                 column_length = 20 # Standard length for numbers in text protocol
+            
             # Fixed fields: charset(2), length(4), type(1), flags(2), decimals(1), filler(2)
+            # Charset: 63 (binary) for non-strings, 33 (utf8) for strings
+            charset = 33 if col_type in [0xfd, 0xfe, 0x0f] else 63
+            
             fixed_fields = (
-                struct.pack('<H', 33) +      # charset utf8_general_ci
-                struct.pack('<I', 16777215) + # max length (16MB) - Fixed from 255
-                b'\xfd' +                     # VARCHAR type
-                struct.pack('<H', 0) +       # flags
-                b'\x00' +                     # decimals
-                b'\x00\x00'                   # filler
+                struct.pack('<H', charset) +      # charset
+                struct.pack('<I', column_length) + # length
+                bytes([col_type]) +               # type (Dynamic!)
+                struct.pack('<H', 0) +            # flags
+                b'\x00' +                         # decimals
+                b'\x00\x00'                       # filler
             )
 
             # Build the packet content
@@ -1463,7 +1476,7 @@ class VDSInstance:
                 :3] + bytes([sequence_number])
 
             logger.debug(
-                f"Built column def for '{column_name}': {packet_length} bytes content + 4 bytes header")
+                f"Built column def for '{column_name}': type={col_type}, length={packet_length}")
             return header + packet
 
         except Exception as e:
@@ -1531,14 +1544,16 @@ class VDSInstance:
         else:
             return b'\xfe' + struct.pack('<Q', value)
 
-    def _decrypt_value_for_vds(self, col_name: str, value: Any) -> str:
-        """
-        VDS DECRYPTION: Decrypt any encrypted data before sending to MySQL clients.
-        This ensures VDS always returns plaintext data regardless of console service processing.
-        """
+    def _decrypt_value_for_vds(self, col_name: str, value: Any) -> Any:
         try:
             # Skip tag columns
             if col_name.startswith('tag_'):
+                return ""
+
+            # Preserve native types for Binary Protocol
+            if isinstance(value, (int, float, bool)):
+                return value
+
                 return ""
 
             # If value is None, return empty string
@@ -1572,7 +1587,7 @@ class VDSInstance:
                         value, settings.CRYPTOPIX_DEFAULT_PASSWORD)
                     logger.info(
                         f"VDS DECRYPT: Successfully decrypted {col_name}")
-                    return str(decrypted_value)
+                    return decrypted_value
                 except Exception as e:
                     logger.error(
                         f"VDS DECRYPT: Failed to decrypt bytes in {col_name}: {e}")
@@ -1662,7 +1677,7 @@ class VDSInstance:
                 # Binary Data row packets
                 for row in rows:
                     try:
-                        row_packet = self._build_mysql_binary_data_row_packet(row, columns, sequence_number)
+                        row_packet = self._build_mysql_binary_data_row_packet(row, columns, sequence_number, column_types)
                         packets.append(row_packet)
                         sequence_number = (sequence_number + 1) % 256
                     except Exception as e:
@@ -1682,7 +1697,7 @@ class VDSInstance:
 
         return packets
 
-    def _build_mysql_binary_data_row_packet(self, row: Dict[str, Any], columns: List[str], sequence_number: int) -> bytes:
+    def _build_mysql_binary_data_row_packet(self, row: Dict[str, Any], columns: List[str], sequence_number: int, column_types: Dict[str, int] = None) -> bytes:
         """
         Build a Binary Protocol Data Row Packet.
         Format:
@@ -1692,6 +1707,8 @@ class VDSInstance:
         """
         try:
             num_columns = len(columns)
+            if column_types is None:
+                column_types = {}
             
             # 1. Packet Header
             packet_body = b'\x00'
@@ -1713,16 +1730,55 @@ class VDSInstance:
                     bit_pos = (i + 2) % 8
                     null_bitmap[byte_pos] |= (1 << bit_pos)
                 else:
-                    # Encode value
-                    str_value = self._decrypt_value_for_vds(col_name, value)
+                    # Encode value based on type
+                    col_type = column_types.get(col_name, 0xfd) # Default VARCHAR
                     
-                    # In VDS, we treat everything as strings (VARCHAR) because
-                    # our console service returns Python strings/objects, and we declared
-                    # columns as VARCHAR (0xfd) in column definitions.
-                    # Binary Protocol for VARCHAR is Length-Encoded String.
+                    # Decrypt/Process value if needed (using _decrypt_value_for_vds to unwrap if strictly needed, 
+                    # but prefer raw native type if available)
+                    # Note: _decrypt_value_for_vds currently returns strings (until my other patch works), 
+                    # so we might need to cast back if it was forced to string.
                     
-                    encoded_val = str_value.encode('utf-8')
-                    values_data += self._encode_length_encoded_int(len(encoded_val)) + encoded_val
+                    final_val = self._decrypt_value_for_vds(col_name, value)
+                    
+                    try:
+                        # Numeric Types
+                        if col_type == 0x01: # TINYINT
+                            values_data += struct.pack('<b', int(final_val))
+                        elif col_type == 0x02: # SHORT (SMALLINT)
+                            values_data += struct.pack('<h', int(final_val))
+                        elif col_type == 0x03: # LONG (INT)
+                            values_data += struct.pack('<i', int(final_val))
+                        elif col_type == 0x08: # LONGLONG (BIGINT)
+                            values_data += struct.pack('<q', int(final_val))
+                        elif col_type == 0x04: # FLOAT
+                            values_data += struct.pack('<f', float(final_val))
+                        elif col_type == 0x05: # DOUBLE
+                            values_data += struct.pack('<d', float(final_val))
+                        
+                        # Date/Time Types (Simplified packing, usually needs full parsing)
+                        # For now, if we receive date objects, we should pack them. 
+                        # If string, we might need to parse.
+                        # Using string fallback for now unless we are sure.
+                        
+                        # String/Binary Types
+                        else:
+                            # VARCHAR, VAR_STRING, STRING, BLOB, etc.
+                            if isinstance(final_val, bytes):
+                                values_data += self._encode_length_encoded_int(len(final_val)) + final_val
+                            else:
+                                str_val = str(final_val)
+                                encoded_val = str_val.encode('utf-8')
+                                values_data += self._encode_length_encoded_int(len(encoded_val)) + encoded_val
+                            
+                    except Exception as e:
+                        logger.warning(f"Failed to binary pack column {col_name} (type {col_type}) value {final_val}: {e}")
+                        # Fallback to string handling
+                        if isinstance(final_val, bytes):
+                             values_data += self._encode_length_encoded_int(len(final_val)) + final_val
+                        else:
+                             str_val = str(final_val)
+                             encoded_val = str_val.encode('utf-8')
+                             values_data += self._encode_length_encoded_int(len(encoded_val)) + encoded_val
 
             packet_body += null_bitmap + values_data
             

@@ -1202,6 +1202,55 @@ class ConsoleService:
                             except Exception as e:
                                 logger.warning(f"Could not extract column types: {e}")
 
+                            # Restore Metadata Types
+                            # The cursor returns types from the Encrypted DB (e.g. TEXT/BLOB)
+                            # We must override these with the Original Schema types so VDS sends correct ColumnDefs
+                            try:
+                                # Determine table name from metadata
+                                table_name = metadata.get('table_name')
+                                # Or try to infer from single table check
+                                
+                                # Helper to get type code
+                                def get_mysql_type_code(type_str):
+                                    type_upper = type_str.upper()
+                                    if 'TINYINT' in type_upper: return 0x01
+                                    if 'SMALLINT' in type_upper: return 0x02
+                                    if 'BIGINT' in type_upper: return 0x08
+                                    if 'INT' in type_upper: return 0x03 # LONG
+                                    if 'FLOAT' in type_upper: return 0x04
+                                    if 'DOUBLE' in type_upper: return 0x05
+                                    if 'DECIMAL' in type_upper: return 0x00 # or 0xf6 NEWDECIMAL
+                                    if 'DATE' in type_upper and 'TIME' not in type_upper: return 0x0a
+                                    if 'DATETIME' in type_upper: return 0x0c
+                                    if 'TIMESTAMP' in type_upper: return 0x07
+                                    if 'CHAR' in type_upper and 'VAR' not in type_upper: return 0xfe
+                                    return 0xfd # Default VARCHAR/VAR_STRING
+
+                                # Check all columns
+                                for col_name in columns:
+                                    original_type = None
+                                    
+                                    # Check TableMapping (loaded via AI Assistant)
+                                    if table_name and table_name in ai_assistant.table_mappings:
+                                        mapping = ai_assistant.table_mappings[table_name]
+                                        if col_name in mapping.encrypted_columns:
+                                            original_type = mapping.encrypted_columns[col_name].data_type
+                                    
+                                    # Fallback: Check global migration state
+                                    if not original_type and self.migration_state and 'table_configs' in self.migration_state:
+                                        for tbl_name, tbl_config in self.migration_state['table_configs'].items():
+                                            if col_name in tbl_config:
+                                                original_type = tbl_config[col_name].get('data_type')
+                                                break
+                                    
+                                    if original_type:
+                                        type_code = get_mysql_type_code(original_type)
+                                        column_types[col_name] = type_code
+                                        logger.debug(f"Restored type for {col_name}: {original_type} -> {type_code}")
+
+                            except Exception as e:
+                                logger.warning(f"Failed to restore metadata types: {e}")
+
                             logger.info(
                                 f"Query returned {len(rows)} rows, {len(columns)} columns")
 
@@ -1756,6 +1805,32 @@ class ConsoleService:
                             logger.debug(
                                 f"Decrypted value type: {type(decrypted_value)}, value: {decrypted_value}")
 
+                            # Restore original data type if possible
+                            # This is critical for VDS Binary Protocol to work correctly
+                            # Find column definition in table mapping
+                            original_type = "TEXT"
+                            if source.startswith("table_mapping_") and table_source != "unknown":
+                                if table_source in table_mappings and col_name in table_mappings[table_source].encrypted_columns:
+                                    original_type = table_mappings[table_source].encrypted_columns[col_name].data_type
+                            elif self.migration_state and 'table_configs' in self.migration_state:
+                                # Try to find in migration state
+                                for tbl_name, tbl_config in self.migration_state['table_configs'].items():
+                                    if col_name in tbl_config:
+                                        original_type = tbl_config[col_name].get('data_type', 'TEXT')
+                                        break
+                            
+                            # Cast to native type
+                            try:
+                                if original_type:
+                                    original_type_upper = original_type.upper()
+                                    if 'INT' in original_type_upper:
+                                        decrypted_value = int(decrypted_value)
+                                    elif 'FLOAT' in original_type_upper or 'DOUBLE' in original_type_upper or 'DECIMAL' in original_type_upper:
+                                        decrypted_value = float(decrypted_value)
+                                    # Add other types as needed (BOOL, etc)
+                            except Exception as cast_err:
+                                logger.warning(f"Failed to cast {col_name} to {original_type}: {cast_err}")
+
                             # Store decryption details
                             decryption_info['decrypted_columns'].add(col_name)
                             row_decryption_info['decrypted_fields'][col_name] = {
@@ -1772,7 +1847,7 @@ class ConsoleService:
                             # Decrypted value should already be a string or JSON-parsable
                             decrypted_row[col_name] = decrypted_value
                             logger.debug(
-                                f"Successfully decrypted {col_name}: {decrypted_value}")
+                                f"Successfully decrypted {col_name}: {decrypted_value} (Type: {type(decrypted_value)})")
 
                         except Exception as e:
                             logger.warning(
