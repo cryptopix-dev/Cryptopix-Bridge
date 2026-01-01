@@ -759,8 +759,9 @@ class VDSInstance:
                 result = self._execute_query(query, connection_id)
                 if not result.get("success", False):
                     return [self._build_mysql_error_packet(result.get("error", "Unknown error"))]
-                # Return list containing the concatenated result set packets
-                return [self._build_mysql_result_set_packets(result, sequence_number)]
+                # Return the list of packets directly (don't wrap in another list!)
+                # _build_mysql_result_set_packets already returns a list of packets
+                return self._build_mysql_result_set_packets(result, sequence_number)
                 
             elif query_type in ("INSERT", "UPDATE", "DELETE"):
                 result = self._execute_query(query, connection_id)
@@ -780,7 +781,7 @@ class VDSInstance:
 
             elif query_type == "SET":
                return [self._build_mysql_ok_packet(sequence_number)]
-               
+                
             else:
                 result = self._execute_query(query, connection_id)
                 if not result.get("success", False):
@@ -826,7 +827,7 @@ class VDSInstance:
         
         if "DATABASES" in query_upper:
              result = {"success": True, "query_type": "SELECT", "columns": ["Database"], "rows": [["encrypted_db"]]}
-             return [self._build_mysql_result_set_packets(result, sequence_number)]
+             return self._build_mysql_result_set_packets(result, sequence_number)
         
         if "TABLES" in query_upper:
              try:
@@ -839,7 +840,7 @@ class VDSInstance:
                      rows = [[t] for t in tables]
                      result = {"success": True, "query_type": "SELECT", "columns": ["Tables_in_encrypted_db"], "rows": rows}
                      logger.info(f"Returning {len(rows)} tables from table_mappings")
-                     return [self._build_mysql_result_set_packets(result, sequence_number)]
+                     return self._build_mysql_result_set_packets(result, sequence_number)
                  else:
                      # Fallback: query console service
                      logger.info("No table_mappings, querying console service for SHOW TABLES")
@@ -849,12 +850,12 @@ class VDSInstance:
                      if res.get("success") and res.get("rows"):
                          # Console service returned results
                          logger.info(f"Returning {len(res.get('rows', []))} tables from console service")
-                         return [self._build_mysql_result_set_packets(res, sequence_number)]
+                         return self._build_mysql_result_set_packets(res, sequence_number)
                      else:
                          # No tables found, return empty result
                          logger.warning("No tables found in console service result")
                          result = {"success": True, "query_type": "SELECT", "columns": ["Tables_in_encrypted_db"], "rows": []}
-                         return [self._build_mysql_result_set_packets(result, sequence_number)]
+                         return self._build_mysql_result_set_packets(result, sequence_number)
              except Exception as e:
                  logger.error(f"Error handling SHOW TABLES: {e}")
                  return [self._build_mysql_error_packet(f"Error: {str(e)}")]
@@ -863,7 +864,7 @@ class VDSInstance:
         result = self._execute_query(query, 0)
         if result.get("success", False):
              if result.get("query_type") == "SELECT":
-                 return [self._build_mysql_result_set_packets(result, sequence_number)]
+                 return self._build_mysql_result_set_packets(result, sequence_number)
              else:
                  return [self._build_mysql_ok_packet(sequence_number)]
         return [self._build_mysql_error_packet(result.get("error", "Unknown error"))]
