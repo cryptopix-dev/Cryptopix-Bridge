@@ -1200,24 +1200,36 @@ class ConsoleService:
                             # Extract column types if available to support correct type handling in VDS
                             column_types = {}
                             try:
-                                print(f"DEBUG_STDOUT: Result type: {type(result)}", flush=True)
+                                logger.info(f"🔍 Attempting to extract column types from result")
+                                logger.info(f"   Result type: {type(result)}")
+                                
                                 if hasattr(result, 'cursor'):
-                                    print(f"DEBUG_STDOUT: Result has cursor: {result.cursor}", flush=True)
-                                if hasattr(result, 'cursor'):
-                                    logger.info(f"Result has cursor: {result.cursor}")
+                                    logger.info(f"   ✅ Result has cursor: {result.cursor}")
+                                    
                                     if result.cursor and hasattr(result.cursor, 'description'):
-                                        logger.info(f"Cursor description: {result.cursor.description}")
+                                        logger.info(f"   ✅ Cursor has description attribute")
+                                        logger.info(f"   Cursor description: {result.cursor.description}")
+                                        
                                         for i, desc in enumerate(result.cursor.description):
                                             if i < len(columns):
                                                 # desc[1] is the type_code
-                                                column_types[columns[i]] = desc[1]
-                                        logger.info(f"Extracted column types: {column_types}")
+                                                type_code = desc[1]
+                                                column_types[columns[i]] = type_code
+                                                logger.info(f"   ✅ Column '{columns[i]}' → type_code={type_code} (0x{type_code:02x})")
+                                        
+                                        logger.info(f"📊 Final extracted column_types: {column_types}")
                                     else:
-                                        logger.info("Cursor has no description")
+                                        if not result.cursor:
+                                            logger.warning("   ⚠️ result.cursor is None")
+                                        elif not hasattr(result.cursor, 'description'):
+                                            logger.warning("   ⚠️ Cursor has no 'description' attribute")
                                 else:
-                                    logger.info("Result has no cursor attribute")
+                                    logger.warning("   ⚠️ Result has no 'cursor' attribute")
+                                    
                             except Exception as e:
-                                logger.warning(f"Could not extract column types: {e}")
+                                logger.error(f"❌ Failed to extract column types: {e}")
+                                import traceback
+                                logger.error(traceback.format_exc())
 
                             logger.info(
                                 f"Query returned {len(rows)} rows, {len(columns)} columns")

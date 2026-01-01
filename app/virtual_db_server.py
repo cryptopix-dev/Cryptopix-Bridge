@@ -1258,6 +1258,43 @@ class VDSInstance:
             return "INDEX"
         else:
             return "OTHER"
+    
+    def _get_mysql_type_name(self, type_code: int) -> str:
+        """Get human-readable name for MySQL type code"""
+        type_names = {
+            0x00: "DECIMAL",
+            0x01: "TINY",
+            0x02: "SHORT",
+            0x03: "LONG",
+            0x04: "FLOAT",
+            0x05: "DOUBLE",
+            0x06: "NULL",
+            0x07: "TIMESTAMP",
+            0x08: "LONGLONG",
+            0x09: "INT24",
+            0x0a: "DATE",
+            0x0b: "TIME",
+            0x0c: "DATETIME",
+            0x0d: "YEAR",
+            0x0e: "NEWDATE",
+            0x0f: "VARCHAR",
+            0x10: "BIT",
+            0x11: "TIMESTAMP2",
+            0x12: "DATETIME2",
+            0x13: "TIME2",
+            0xf5: "JSON",
+            0xf6: "NEWDECIMAL",
+            0xf7: "ENUM",
+            0xf8: "SET",
+            0xf9: "TINY_BLOB",
+            0xfa: "MEDIUM_BLOB",
+            0xfb: "LONG_BLOB",
+            0xfc: "BLOB",
+            0xfd: "VAR_STRING",
+            0xfe: "STRING",
+            0xff: "GEOMETRY"
+        }
+        return type_names.get(type_code, f"UNKNOWN_{type_code}")
 
     def _receive_handshake_response(self, client_socket: socket.socket, connection_id: int) -> bool:
         """
@@ -1405,6 +1442,21 @@ class VDSInstance:
                 rows = result.get("rows", [])
                 columns = result.get("columns", [])
                 column_types = result.get("column_types", {})
+
+                # Diagnostic logging
+                logger.info(f"📊 VDS Building result set:")
+                logger.info(f"   - Rows: {len(rows)}")
+                logger.info(f"   - Columns: {columns}")
+                logger.info(f"   - Column Types received: {column_types}")
+                
+                if not column_types:
+                    logger.warning("⚠️ NO COLUMN TYPES in result! All columns will default to VAR_STRING (0xfd)")
+                else:
+                    logger.info(f"✅ Column type mapping:")
+                    for col_name in columns:
+                        col_type = column_types.get(col_name, 0xfd)
+                        type_name = self._get_mysql_type_name(col_type)
+                        logger.info(f"   - {col_name}: type_code={col_type} (0x{col_type:02x}) [{type_name}]")
 
                 if not columns:
                     # No columns - return OK packet
@@ -1718,6 +1770,9 @@ class VDSInstance:
         try:
             from datetime import datetime, date, time
             packet = b""
+            
+            # Log once per row
+            logger.debug(f"🔨 Building data row packet (seq={sequence_number})")
 
             for col_idx, col_name in enumerate(columns):
                 value = None
@@ -1726,12 +1781,16 @@ class VDSInstance:
 
                 if value is None:
                     packet += b'\xfb'
+                    logger.debug(f"   {col_name}: NULL")
                 else:
                     # Get the MySQL type code for this column
                     mysql_type_code = column_types.get(col_name)
                     
                     # Target value for conversion/decryption
                     typed_value = self._decrypt_value_for_vds(col_name, value, mysql_type_code)
+                    
+                    # Log the conversion
+                    logger.debug(f"   {col_name}: {value!r} → {typed_value!r} (type={type(typed_value).__name__}, mysql_type=0x{mysql_type_code:02x if mysql_type_code else 0:02x})")
                     
                     if isinstance(typed_value, datetime):
                         str_value = typed_value.strftime('%Y-%m-%d %H:%M:%S')
