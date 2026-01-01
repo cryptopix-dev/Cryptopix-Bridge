@@ -9,6 +9,7 @@ import time
 import threading
 from typing import Dict, Any, List, Optional, Tuple
 from enum import Enum
+from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from app.config import settings
@@ -1868,9 +1869,16 @@ class ConsoleService:
                                 raw_value, bytes) else raw_value[:50]) + "..."
                             decrypted_row[col_name] = f"<DECRYPTION_FAILED:{preview}>"
                     else:
-                        # Not encrypted, just make JSON serializable
-                        decrypted_row[col_name] = self._make_json_serializable(
-                            raw_value)
+                        # Not encrypted
+                        # Preserve numeric types for VDS (prevent string conversion of Decimal)
+                        if isinstance(raw_value, Decimal):
+                            decrypted_row[col_name] = float(raw_value)
+                        elif isinstance(raw_value, (int, float)):
+                            decrypted_row[col_name] = raw_value
+                        else:
+                            # Not encrypted, just make JSON serializable
+                            decrypted_row[col_name] = self._make_json_serializable(
+                                raw_value)
 
                 decrypted_rows.append(decrypted_row)
 

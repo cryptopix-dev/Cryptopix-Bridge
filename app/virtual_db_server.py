@@ -1616,13 +1616,18 @@ class VDSInstance:
                     packet += b'\xfb'
                 else:
                     # Use the same decryption logic as console service for consistency
-                    str_value = self._decrypt_value_for_vds(col_name, value)
+                    # _decrypt_value_for_vds now returns Any (int, float, bytes, str)
+                    decrypted_val = self._decrypt_value_for_vds(col_name, value)
 
-                    # Encode as UTF-8
-                    encoded_value = str_value.encode('utf-8')
+                    if isinstance(decrypted_val, bytes):
+                        # Already binary/bytes, pass directly
+                        final_bytes = decrypted_val
+                    else:
+                        # Convert number/string to utf-8 encoded bytes
+                        final_bytes = str(decrypted_val).encode('utf-8')
 
                     # Length-encoded: proper encoding for any length
-                    packet += self._encode_length_encoded_int(len(encoded_value)) + encoded_value
+                    packet += self._encode_length_encoded_int(len(final_bytes)) + final_bytes
 
             packet_length = len(packet)
             header = struct.pack('<I', packet_length)[
