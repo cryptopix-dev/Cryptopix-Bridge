@@ -4411,9 +4411,9 @@ class VirtualDatabaseServer:
                     return self._build_mysql_result_set_packets(result, sequence_number)
                 else:
                     return [self._build_mysql_ok_packet(sequence_number)]
-            elif command_upper.startswith('DESCRIBE') or command_upper.startswith('DESC'):
-                # Handle DESCRIBE commands
-                result = self._handle_explain_query(query, connection_id)
+            elif command_upper.startswith('DESC'):
+                # Handle DESCRIBE / DESC commands - route to console service to use virtual schema
+                result = self._execute_query(query, connection_id)
                 if result.get("success") and result.get("rows"):
                     return self._build_mysql_result_set_packets(result, sequence_number)
                 else:
@@ -4500,13 +4500,18 @@ class VirtualDatabaseServer:
                 if not table_name and result.get("metadata"):
                     table_name = result.get("metadata", {}).get("table_name")
                 
-                column_metadata = {}
+                # PREFER: Use column_types populated by ConsoleService (contains restored original types)
+                column_metadata = result.get("column_types", {})
                 
-                if table_name:
-                    # Use migration state to get ORIGINAL column types, ensuring correct data types for clients
+                if not column_metadata and table_name:
+                    # Fallback: Use migration state to get ORIGINAL column types
                     try:
-                        column_metadata = self._get_mysql_column_types(table_name, columns)
-                        logger.info(f"Retrieved original schema types for {len(column_metadata)} columns in {table_name}")
+                        if hasattr(self, '_get_mysql_column_types'):
+                            column_metadata = self._get_mysql_column_types(table_name, columns)
+                            logger.info(f"Retrieved original schema types via helper for {len(column_metadata)} columns in {table_name}")
+                        else:
+                            # If method missing, try accessing console_service helper or fallback
+                            logger.debug("Helper _get_mysql_column_types not found")
                     except Exception as meta_err:
                         logger.warning(f"Failed to get original types for {table_name}: {meta_err}")
                         # Fallback to physical schema

@@ -1089,6 +1089,45 @@ class ConsoleService:
                                 result = self._execute_encrypted_select(
                                     conn, sql_query, metadata)
 
+                            # Restore column types for encrypted SELECTs
+                            column_types = {}
+                            if "columns" in result and result["columns"]:
+                                # Helper to get type code
+                                def get_mysql_type_code(type_str):
+                                    type_upper = type_str.upper()
+                                    if 'TINYINT' in type_upper: return 0x01
+                                    if 'SMALLINT' in type_upper: return 0x02
+                                    if 'BIGINT' in type_upper: return 0x08
+                                    if 'INT' in type_upper: return 0x03 # LONG
+                                    if 'FLOAT' in type_upper: return 0x04
+                                    if 'DOUBLE' in type_upper: return 0x05
+                                    if 'DECIMAL' in type_upper or 'NUMERIC' in type_upper: return 0xf6 # NEWDECIMAL
+                                    if 'DATE' in type_upper and 'TIME' not in type_upper: return 0x0a
+                                    if 'DATETIME' in type_upper: return 0x0c
+                                    if 'TIMESTAMP' in type_upper: return 0x07
+                                    if 'CHAR' in type_upper and 'VAR' not in type_upper: return 0xfe
+                                    return 0xfd # Default VARCHAR/VAR_STRING
+
+                                table_name = metadata.get('table_name')
+                                # Lookup loop similar to standard SELECT
+                                for col_name in result["columns"]:
+                                    original_type = None
+                                    if self.migration_state and 'tables' in self.migration_state:
+                                        if table_name and table_name in self.migration_state['tables']:
+                                            tbl_cols = self.migration_state['tables'][table_name].get('columns', [])
+                                            # Handle LIST of columns
+                                            if isinstance(tbl_cols, list):
+                                                for col_def in tbl_cols:
+                                                    if col_def.get('name') == col_name:
+                                                        original_type = col_def.get('type')
+                                                        break
+                                            elif isinstance(tbl_cols, dict):
+                                                if col_name in tbl_cols:
+                                                    original_type = tbl_cols[col_name].get('type')
+                                    
+                                    if original_type:
+                                        column_types[col_name] = get_mysql_type_code(original_type)
+
                             return {
                                 "success": True,
                                 "command_type": "SQL",
@@ -1096,6 +1135,7 @@ class ConsoleService:
                                 "rows": result["rows"],
                                 "row_count": len(result["rows"]),
                                 "columns": result["columns"],
+                                "column_types": column_types, # Added
                                 "original_query": sql_query,
                                 "translated_query": display_query,
                                 "metadata": metadata
@@ -1247,7 +1287,7 @@ class ConsoleService:
                                     if 'INT' in type_upper: return 0x03 # LONG
                                     if 'FLOAT' in type_upper: return 0x04
                                     if 'DOUBLE' in type_upper: return 0x05
-                                    if 'DECIMAL' in type_upper: return 0x00 # or 0xf6 NEWDECIMAL
+                                    if 'DECIMAL' in type_upper or 'NUMERIC' in type_upper: return 0xf6 # NEWDECIMAL
                                     if 'DATE' in type_upper and 'TIME' not in type_upper: return 0x0a
                                     if 'DATETIME' in type_upper: return 0x0c
                                     if 'TIMESTAMP' in type_upper: return 0x07
@@ -1264,12 +1304,50 @@ class ConsoleService:
                                         if col_name in mapping.encrypted_columns:
                                             original_type = mapping.encrypted_columns[col_name].data_type
                                     
-                                    # Fallback: Check global migration state
+                                    # Fallback: Check global migration state (table_configs)
                                     if not original_type and self.migration_state and 'table_configs' in self.migration_state:
-                                        for tbl_name, tbl_config in self.migration_state['table_configs'].items():
+                                        # First try with known table name
+                                        if table_name and table_name in self.migration_state['table_configs']:
+                                            tbl_config = self.migration_state['table_configs'][table_name]
                                             if col_name in tbl_config:
                                                 original_type = tbl_config[col_name].get('data_type')
-                                                break
+                                        
+                                        # Then search all tables if not found
+                                        if not original_type:
+                                            for tbl_name, tbl_config in self.migration_state['table_configs'].items():
+                                                if col_name in tbl_config:
+                                                    original_type = tbl_config[col_name].get('data_type')
+                                                    break
+                                    
+                                    # Fallback: Check original schema 'tables' (e.g. for non-encrypted columns)
+                                    if not original_type and self.migration_state and 'tables' in self.migration_state:
+                                        # First try with known table name
+                                        if table_name and table_name in self.migration_state['tables']:
+                                            tbl_cols = self.migration_state['tables'][table_name].get('columns', [])
+                                            # Handle LIST of columns
+                                            if isinstance(tbl_cols, list):
+                                                for col_def in tbl_cols:
+                                                    if col_def.get('name') == col_name:
+                                                        original_type = col_def.get('type')
+                                                        break
+                                            elif isinstance(tbl_cols, dict):
+                                                if col_name in tbl_cols:
+                                                    original_type = tbl_cols[col_name].get('type')
+                                        
+                                        # Then search all tables
+                                        if not original_type:
+                                            for tbl_name, tbl_data in self.migration_state['tables'].items():
+                                                tbl_cols = tbl_data.get('columns', [])
+                                                if isinstance(tbl_cols, list):
+                                                    for col_def in tbl_cols:
+                                                        if col_def.get('name') == col_name:
+                                                            original_type = col_def.get('type')
+                                                            break
+                                                elif isinstance(tbl_cols, dict):
+                                                    if col_name in tbl_cols:
+                                                        original_type = tbl_cols[col_name].get('type')
+                                                        break
+                                                if original_type: break
                                     
                                     if original_type:
                                         type_code = get_mysql_type_code(original_type)
@@ -1346,6 +1424,14 @@ class ConsoleService:
         """
         Execute DDL command directly without translation
         """
+        # Special handling for SHOW COLUMNS / DESCRIBE to return original schema types
+        # ensuring clients (ORMs) see the correct types instead of encrypted text/blob
+        upper_query = sql_query.upper().strip()
+        if (upper_query.startswith('SHOW COLUMNS') or 
+            upper_query.startswith('DESCRIBE') or 
+            (upper_query.startswith('DESC') and not upper_query.startswith('DESCRIBE'))):
+            return self._handle_virtual_describe(sql_query)
+
         try:
             if connection:
                 return self._run_ddl_execution(connection, sql_query, query_type)
@@ -1897,15 +1983,69 @@ class ConsoleService:
                             decrypted_row[col_name] = f"<DECRYPTION_FAILED:{preview}>"
                     else:
                         # Not encrypted
+                        final_value = raw_value
+
+                        # ATTEMPT TYPE RESTORATION
+                        # If value is string/bytes (from DB driver) but original schema says number, cast it.
+                        # This fixes "must be real number, not str" errors in client apps.
+                        if isinstance(final_value, (str, bytes)):
+                            original_type = None
+                            
+                            # 1. Check 'tables' in migration_state (Best source for original schema)
+                            if self.migration_state and 'tables' in self.migration_state:
+                                # Try specific table if known
+                                if table_name and table_name in self.migration_state['tables']:
+                                    tbl_cols = self.migration_state['tables'][table_name].get('columns', [])
+                                    # Handle LIST of columns
+                                    if isinstance(tbl_cols, list):
+                                        for col_def in tbl_cols:
+                                            if col_def.get('name') == col_name:
+                                                original_type = col_def.get('type')
+                                                break
+                                    elif isinstance(tbl_cols, dict):
+                                        if col_name in tbl_cols:
+                                            original_type = tbl_cols[col_name].get('type')
+                                
+                                # Fallback: search all tables
+                                if not original_type:
+                                    for tbl_name, tbl_data in self.migration_state['tables'].items():
+                                        tbl_cols = tbl_data.get('columns', [])
+                                        if isinstance(tbl_cols, list):
+                                            for col_def in tbl_cols:
+                                                if col_def.get('name') == col_name:
+                                                    original_type = col_def.get('type')
+                                                    break
+                                        elif isinstance(tbl_cols, dict):
+                                            if col_name in tbl_cols:
+                                                original_type = tbl_cols[col_name].get('type')
+                                                break
+                                        if original_type: break
+                            
+                            if original_type:
+                                try:
+                                    original_type_upper = original_type.upper()
+                                    if 'INT' in original_type_upper:
+                                        # Handle string decimals "1.0" -> 1 if needed, but int("1.0") fails
+                                        # So try float first then int if it looks like float
+                                        if isinstance(final_value, str) and '.' in final_value:
+                                             final_value = int(float(final_value))
+                                        else:
+                                             final_value = int(final_value)
+                                    elif 'FLOAT' in original_type_upper or 'DOUBLE' in original_type_upper or 'DECIMAL' in original_type_upper:
+                                        final_value = float(final_value)
+                                except Exception:
+                                    # specific cast failed, ignore
+                                    pass
+
                         # Preserve numeric types for VDS (prevent string conversion of Decimal)
-                        if isinstance(raw_value, Decimal):
-                            decrypted_row[col_name] = float(raw_value)
-                        elif isinstance(raw_value, (int, float)):
-                            decrypted_row[col_name] = raw_value
+                        if isinstance(final_value, Decimal):
+                            decrypted_row[col_name] = float(final_value)
+                        elif isinstance(final_value, (int, float)):
+                            decrypted_row[col_name] = final_value
                         else:
                             # Not encrypted, just make JSON serializable
                             decrypted_row[col_name] = self._make_json_serializable(
-                                raw_value)
+                                final_value)
 
                 decrypted_rows.append(decrypted_row)
 
@@ -3438,6 +3578,125 @@ class ConsoleService:
                 "error": f"Failed to list encrypted schemas: {str(e)}"
             }
 
+    def _handle_virtual_describe(self, sql_query: str) -> Dict[str, Any]:
+        """
+        Handle DESCRIBE/SHOW COLUMNS by returning original schema types
+        instead of the encrypted database types.
+        """
+        try:
+            upper_query = sql_query.upper().strip()
+            table_name = None
+            
+            # Extract table name
+            if upper_query.startswith('SHOW COLUMNS'):
+                match = re.search(r'FROM\s+[`]?(\w+)[`]?', upper_query, re.IGNORECASE)
+                if match:
+                    table_name = match.group(1).lower()
+            elif upper_query.startswith('DESCRIBE'):
+                match = re.search(r'DESCRIBE\s+[`]?(\w+)[`]?', upper_query, re.IGNORECASE)
+                if match:
+                    table_name = match.group(1).lower()
+            elif upper_query.startswith('DESC'):
+                match = re.search(r'DESC\s+[`]?(\w+)[`]?', upper_query, re.IGNORECASE)
+                if match:
+                    table_name = match.group(1).lower()
+            
+            if not table_name:
+                return {"success": False, "error": "Could not parse table name", "query_type": "SHOW"}
+
+            logger.info(f"Virtual DESCRIBE for table: {table_name}")
+            
+            columns_data = []
+            
+            # Try finding in original schema ('tables') - BEST SOURCE
+            found_schema = False
+            if self.migration_state and 'tables' in self.migration_state:
+                if table_name in self.migration_state['tables']:
+                    table_info = self.migration_state['tables'][table_name]
+                    found_schema = True
+                    
+                    # Columns list from schema
+                    if 'columns' in table_info:
+                        cols = table_info['columns']
+                        if isinstance(cols, dict):
+                            for col_name, col_def in cols.items():
+                                columns_data.append(self._format_column_def(col_name, col_def))
+                        elif isinstance(cols, list):
+                            for col_def in cols:
+                                if 'name' in col_def:
+                                    columns_data.append(self._format_column_def(col_def['name'], col_def))
+            
+            # Fallback to table_configs (Mappings) if original schema not found
+            if not found_schema and self.migration_state and 'table_configs' in self.migration_state:
+                if table_name in self.migration_state['table_configs']:
+                    table_config = self.migration_state['table_configs'][table_name]
+                    found_schema = True
+                    
+                    for col_name, col_config in table_config.items():
+                        columns_data.append({
+                            "Field": col_name,
+                            "Type": col_config.get('data_type', 'varchar(255)'),
+                            "Null": "YES",
+                            "Key": "PRI" if col_name == 'id' else "",
+                            "Default": None,
+                            "Extra": ""
+                        })
+
+            if found_schema and columns_data:
+                logger.info(f"Returning {len(columns_data)} columns from virtual schema for {table_name}")
+                
+                 # Reformat rows to match "columns" list for VDS
+                ordered_rows = []
+                for row_dict in columns_data:
+                    ordered_rows.append([
+                        row_dict.get("Field"),
+                        row_dict.get("Type"),
+                        row_dict.get("Null"),
+                        row_dict.get("Key"),
+                        row_dict.get("Default"),
+                        row_dict.get("Extra")
+                    ])
+                
+                return {
+                    "success": True,
+                    "query_type": "SELECT", # Treat as SELECT to trigger result set packet build
+                    "columns": ["Field", "Type", "Null", "Key", "Default", "Extra"],
+                    "rows": ordered_rows,
+                    "table_name": table_name
+                }
+            
+            # Use original fallback logic but pass None for connection since it's tricky here
+            # Ideally we'd use execute_ddl but let's just return error if not found to force debug
+            logger.warning(f"Table {table_name} not found in metadata for virtual describe")
+            # Fallback to query the DB (will show encrypted types, but better than nothing)
+            db_url = self.migration_state.get('encrypted_db_url') if self.migration_state else None
+            if db_url:
+                try:
+                    engine = create_engine(db_url)
+                    with engine.connect() as conn:
+                        return self._run_ddl_execution(conn, sql_query, "SHOW")
+                except: pass
+
+            return {"success": False, "error": f"Table {table_name} not found", "query_type": "SHOW"}
+
+        except Exception as e:
+            logger.error(f"Error in virtual describe: {e}")
+            return {"success": False, "error": str(e), "query_type": "SHOW"}
+
+    def _format_column_def(self, name, col_def):
+        """Format column definition for SHOW COLUMNS"""
+        type_str = col_def.get('type', 'varchar(255)').lower()
+        if type_str == 'integer': type_str = 'int(11)'
+        if type_str == 'string': type_str = 'varchar(255)'
+        
+        return {
+            "Field": name,
+            "Type": type_str,
+            "Null": "YES" if col_def.get('nullable', True) else "NO",
+            "Key": "PRI" if col_def.get('primary_key') else "",
+            "Default": col_def.get('default'),
+            "Extra": "" 
+        }
 
 # Global console service instance
 console_service = ConsoleService()
