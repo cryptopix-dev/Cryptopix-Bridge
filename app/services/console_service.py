@@ -146,6 +146,33 @@ class ConsoleService:
             with open(state_file, 'r') as f:
                 migration_state = json.load(f)
 
+            # TRY TO LOAD ORIGINAL SCHEMA (for VDS type preservation)
+            # This is critical for returning correct data types (int, float) instead of strings
+            try:
+                schema_folder = state_file.parent
+                original_schema_file = schema_folder / "original_schema.json"
+                
+                if original_schema_file.exists():
+                    logger.info(f"Loading original schema from: {original_schema_file}")
+                    with open(original_schema_file, 'r') as f:
+                        original_schema = json.load(f)
+                    
+                    # Convert list-based columns to dict-based for fast lookup in VDS
+                    # original_schema has: tables -> table_name -> columns (list)
+                    # VDS needs: tables -> table_name -> columns (dict)
+                    if 'tables' in original_schema:
+                        migration_state['tables'] = {}
+                        for table_name, table_data in original_schema['tables'].items():
+                            migration_state['tables'][table_name] = {'columns': {}}
+                            if 'columns' in table_data and isinstance(table_data['columns'], list):
+                                for col in table_data['columns']:
+                                    if 'name' in col:
+                                        migration_state['tables'][table_name]['columns'][col['name']] = col
+                        
+                        logger.info(f"Merged original schema for {len(migration_state['tables'])} tables into migration state")
+            except Exception as e:
+                logger.warning(f"Failed to load/merge original schema: {e}")
+
             # Override encrypted_db_url if provided (to be safe)
             if encrypted_db_url:
                 migration_state["encrypted_db_url"] = encrypted_db_url
