@@ -48,7 +48,6 @@ from app.services.enhanced_sql_translator import enhanced_sql_translator
 from app.services.console_service import console_service
 from app.core.encryption import clwe_encryptor
 from app.core.database_adapters import DatabaseType
-from app.core.type_conversion import OriginalDatabaseTypeConverter
 
 logger = logging.getLogger(__name__)
 
@@ -241,12 +240,6 @@ class VDSInstance:
         from app.services.ai_assistant import AIAssistant
         self.console_service = ConsoleService()
         self.ai_assistant = AIAssistant()
-        
-        # Initialize enhanced type converter
-        self.type_converter = EnhancedOriginalDatabaseTypeConverter(
-            migration_state=self.migration_state,
-            schema_version=self.migration_state.get('schema_version') if self.migration_state else None
-        )
 
         # Per-instance migration state
         self.migration_state = migration_state
@@ -298,10 +291,7 @@ class VDSInstance:
             
             # Ensure the console service has the migration state set
             self.console_service.migration_state = self.migration_state
-            
-            # Update type converter with migration state
-            self.type_converter.set_migration_state(self.migration_state)
-            
+
             logger.info(
                 f"VDS Instance loaded migration state: {bool(self.migration_state)}")
             if self.migration_state:
@@ -1869,36 +1859,36 @@ class VDSInstance:
                 f"VDS DECRYPT: Critical error processing {col_name}: {e}")
             return f"<ERROR:{str(e)}>"
 
-    def _build_mysql_data_row_packet(self, row: Dict[str, Any], columns: List[str], sequence_number: int, column_types: Dict[str, int] = None, table_name: str = None) -> bytes:
+    def _build_mysql_data_row_packet(self, row: Dict[str, Any], columns: List[str], sequence_number: int, column_types: Dict[str, int] = None) -> bytes:
         """Build data row packet with proper type preservation based on column metadata"""
         try:
             packet = b""
             column_types = column_types or {}
- 
+
             for col_name in columns:
                 value = row.get(col_name, None)
- 
+
                 # Handle NULL values
                 if value is None:
                     # NULL is represented as 0xFB (251) in MySQL protocol
                     packet += b'\xfb'
                 else:
-                    # Decrypt the value first with enhanced type conversion
-                    decrypted_val = self._decrypt_value_for_vds(col_name, value, table_name)
- 
+                    # Decrypt the value first
+                    decrypted_val = self._decrypt_value_for_vds(col_name, value)
+
                     # Convert to proper type based on column metadata
                     final_bytes = self._convert_value_to_mysql_bytes(decrypted_val, col_name, column_types.get(col_name))
- 
+
                     # Length-encoded: proper encoding for any length
                     packet += self._encode_length_encoded_int(len(final_bytes)) + final_bytes
- 
+
             packet_length = len(packet)
             header = struct.pack('<I', packet_length)[:3] + bytes([sequence_number])
- 
+
             logger.debug(
                 f"Built data row packet: seq={sequence_number}, content_length={packet_length}")
             return header + packet
- 
+
         except Exception as e:
             logger.error(f"Error building data row packet: {e}")
             import traceback
@@ -2316,59 +2306,31 @@ class VDSInstance:
         if query_upper.startswith("USE"): return "SET"
         return "UNKNOWN"
 
-    def _decrypt_value_for_vds(self, col_name: str, value: Any, table_name: str = None) -> Any:
+    def _decrypt_value_for_vds(self, col_name: str, value: Any) -> str:
         """
         VDS DECRYPTION: Decrypt any encrypted data before sending to MySQL clients.
-        This method now integrates with the enhanced type conversion module.
         """
         try:
-            if col_name.startswith('tag_'):
-                return None
-            if value is None:
-                return None
-                
-            decrypted_value = value
-            
-            # If value is already a string, check if it's actually encrypted hex data
+            if col_name.startswith('tag_'): return ""
+            if value is None: return ""
             if isinstance(value, str):
                 if len(value) > 100 and len(value) % 2 == 0:
                     try:
                         hex_bytes = bytes.fromhex(value)
                         if hex_bytes.startswith(b'RIFF') and b'WEBP' in hex_bytes[:20]:
-                            logger.info(f"VDS DECRYPT: Found encrypted hex WebP data in {col_name}")
-                            decrypted_value = clwe_encryptor.decrypt_value(hex_bytes, settings.CRYPTOPIX_DEFAULT_PASSWORD)
-                            decrypted_value = str(decrypted_value)
-                    except:
-                        logger.debug(f"VDS DECRYPT: Hex string in {col_name} not encrypted")
-                # If not encrypted, value is already decrypted
-            # If value is bytes, it needs decryption
-            elif isinstance(value, bytes):
+                            val = clwe_encryptor.decrypt_value(hex_bytes, settings.CRYPTOPIX_DEFAULT_PASSWORD)
+                            return str(val)
+                    except: pass
+                return value
+            if isinstance(value, bytes):
                 try:
-                    logger.info(f"VDS DECRYPT: Decrypting bytes data in {col_name} (size: {len(value)})")
-                    decrypted_value = clwe_encryptor.decrypt_value(value, settings.CRYPTOPIX_DEFAULT_PASSWORD)
-                    logger.info(f"VDS DECRYPT: Successfully decrypted {col_name}")
-                    decrypted_value = str(decrypted_value)
-                except Exception as e:
-                    logger.error(f"VDS DECRYPT: Failed to decrypt bytes in {col_name}: {e}")
-                    decrypted_value = value.hex()
-            else:
-                decrypted_value = str(value)
-            
-            # Apply type conversion if table name is provided
-            if table_name and hasattr(self, 'type_converter'):
-                try:
-                    converted_value = self.type_converter.convert_to_original_type(
-                        decrypted_value, table_name, col_name
-                    )
-                    return converted_value
-                except Exception as e:
-                    logger.warning(f"Type conversion failed for {table_name}.{col_name}: {e}")
-                    return decrypted_value
-            
-            return decrypted_value
+                    val = clwe_encryptor.decrypt_value(value, settings.CRYPTOPIX_DEFAULT_PASSWORD)
+                    return str(val)
+                except: return value.hex()
+            return str(value)
         except Exception as e:
-            logger.error(f"VDS DECRYPT: Critical error processing {col_name}: {e}")
-            return None
+            logger.error(f"VDS DECRYPT: error processing {col_name}: {e}")
+            return f"<ERROR:{str(e)}>"
 
     def _build_mysql_greeting_packet(self) -> bytes:
         try:
