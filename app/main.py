@@ -588,8 +588,7 @@ def send_metrics():
                 continue
         
         # Send to license server
-        base_url = settings.LICENSE_SERVER_URL.rstrip('/')
-        target_url = f"{base_url}/api/metrics/database"
+        target_url = f"{get_api_base_url()}/metrics/database"
         
         try:
             logger.debug(f"Sending metrics for {len(payload['databases'])} databases to: {target_url}")
