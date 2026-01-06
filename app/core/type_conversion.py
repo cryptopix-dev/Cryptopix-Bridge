@@ -194,9 +194,11 @@ class OriginalTypeConverter:
             if not tbl:
                 continue
 
-            col = tbl.get("columns", {}).get(column)
-            if col:
-                return col.get("original_type") or col.get("type")
+            # Support both nested 'columns' key and flat mapping
+            col_source = tbl.get("columns", tbl) if isinstance(tbl, dict) else {}
+            col = col_source.get(column)
+            if isinstance(col, dict):
+                return col.get("original_type") or col.get("data_type") or col.get("type")
 
         return None
 

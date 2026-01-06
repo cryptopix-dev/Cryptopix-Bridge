@@ -52,6 +52,16 @@ from app.core.type_conversion import type_converter
 
 logger = logging.getLogger(__name__)
 
+# Add file handler for explicit VDS debugging
+try:
+    fh = logging.FileHandler('vds_debug.log')
+    fh.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    fh.setFormatter(formatter)
+    logger.addHandler(fh)
+except Exception:
+    pass
+
 
 # MySQL Protocol Constants
 MYSQL_PROTOCOL_VERSION = 10
@@ -871,6 +881,13 @@ class VDSInstance:
             
             # First, try to get types from migration state (preferred method)
             if self.migration_state:
+                try:
+                    with open(r'c:\Users\potte\OneDrive\Documents\GitHub\Cryptopix-Bridge\vds_trace.txt', 'a') as f:
+                        f.write(f"VDS State Check: keys={list(self.migration_state.keys())}\n")
+                        if 'table_configs' in self.migration_state:
+                             f.write(f"VDS Configs: {list(self.migration_state['table_configs'].keys())}\n")
+                except: pass
+                
                 # Case-insensitive table name lookup
                 table_info = None
                 normalized_table_name = table_name.lower()
@@ -890,19 +907,42 @@ class VDSInstance:
                             table_info = t_info
                             break
 
-                if table_info and 'columns' in table_info:
+                if table_info:
+                    # Handle both structures: nested columns or flat mapping
+                    col_source = table_info.get('columns', table_info) if isinstance(table_info, dict) else {}
+                    try:
+                        with open(r'c:\Users\potte\OneDrive\Documents\GitHub\Cryptopix-Bridge\vds_trace.txt', 'a') as f:
+                            f.write(f"VDS Type Lookup: Table '{table_name}' found. Columns in state: {list(col_source.keys())}\n")
+                    except: pass
+                    
                     for col_name in columns:
                         if col_name.startswith('tag_'):
                             continue
                             
-                        col_info = table_info['columns'].get(col_name)
-                        if col_info and ('type' in col_info or 'data_type' in col_info):
+                        col_info = col_source.get(col_name)
+                        if col_info and isinstance(col_info, dict):
                             # Get type string and convert to metadata
-                            type_str = col_info.get('type') or col_info.get('data_type')
+                            type_str = col_info.get('original_type') or col_info.get('data_type') or col_info.get('type')
                             metadata = self._get_mysql_type_metadata_from_string(type_str)
                             result_column_types[col_name] = metadata
-                            logger.debug(f"Column {col_name}: {type_str} -> Meta {metadata}")
+                            try:
+                                with open(r'c:\Users\potte\OneDrive\Documents\GitHub\Cryptopix-Bridge\vds_trace.txt', 'a') as f:
+                                    f.write(f"VDS Type match: {col_name} | info={col_info} | type_str={type_str} | Meta={metadata}\n")
+                            except: pass
+                        elif col_info:
+                            # String fallback
+                            type_str = str(col_info)
+                            metadata = self._get_mysql_type_metadata_from_string(type_str)
+                            result_column_types[col_name] = metadata
+                            try:
+                                with open(r'c:\Users\potte\OneDrive\Documents\GitHub\Cryptopix-Bridge\vds_trace.txt', 'a') as f:
+                                    f.write(f"VDS Type match (non-dict): {col_name} | val={type_str} | Meta={metadata}\n")
+                            except: pass
                         else:
+                            try:
+                                with open(r'c:\Users\potte\OneDrive\Documents\GitHub\Cryptopix-Bridge\vds_trace.txt', 'a') as f:
+                                    f.write(f"VDS Type MISS: {col_name} not in col_source or missing type info\n")
+                            except: pass
                             result_column_types[col_name] = (MYSQL_TYPE_VAR_STRING, 255, 0)
                     
                     if result_column_types:
