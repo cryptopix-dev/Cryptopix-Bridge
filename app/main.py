@@ -2687,6 +2687,16 @@ def create_encrypted_schema():
                     else:
                         source_type = 'TEXT'
 
+                    # Handle TIMESTAMP columns to avoid MySQL default value conflicts
+                    if 'TIMESTAMP' in source_type.upper():
+                        if 'created_at' in col_name.lower():
+                            source_type = 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
+                        elif 'updated_at' in col_name.lower():
+                            source_type = 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP'
+                        else:
+                            # For other TIMESTAMP columns, use default
+                            source_type = 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
+
                     # Check if source column was auto-increment
                     source_col_info = None
                     for col in source_columns:
