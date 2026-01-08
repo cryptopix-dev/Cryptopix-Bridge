@@ -341,6 +341,9 @@ class ConsoleService:
             Dict containing execution results
         """
         try:
+            instance_id = id(self)
+            print(f"CONSOLE_SERVICE[{instance_id}] execute_command ENTRY: command={command[:100]}, user_id={user_id}", flush=True)
+            logger.info(f"CONSOLE_SERVICE[{instance_id}] execute_command ENTRY: command={command[:100]}, user_id={user_id}")
             # Load migration state from files if not provided
             if migration_state is None:
                 migration_state = self._load_migration_state_from_files(
@@ -374,10 +377,15 @@ class ConsoleService:
                 print(f"DEBUG_STDOUT: Parsed command '{statements[0]}' as Type: {command_type}", flush=True)
 
                 if command_type == CommandType.SQL:
-                    return self._execute_sql_command(parsed_command, user_id, database_url)
+                    result = self._execute_sql_command(parsed_command, user_id, database_url)
+                    print(f"CONSOLE_SERVICE[{instance_id}] RETURNING SQL result: success={result.get('success')}, rows={len(result.get('rows', []))}, cols={len(result.get('columns', []))}", flush=True)
+                    return result
                 elif command_type == CommandType.ADMIN:
-                    return self._execute_admin_command(parsed_command, user_id)
+                    result = self._execute_admin_command(parsed_command, user_id)
+                    print(f"CONSOLE_SERVICE[{instance_id}] RETURNING ADMIN result: success={result.get('success')}", flush=True)
+                    return result
                 else:
+                    print(f"CONSOLE_SERVICE[{instance_id}] RETURNING UNKNOWN command type", flush=True)
                     return {
                         "success": False,
                         "error": f"Unknown command type: {command}",
@@ -935,7 +943,8 @@ class ConsoleService:
         Execute SQL command using the translator
         """
         try:
-            logger.info(f"Executing SQL command: {sql_query[:100]}...")
+            logger.info(f"CONSOLE_SERVICE: Executing SQL command: {sql_query[:100]}...")
+            print(f"CONSOLE_SERVICE: Executing SQL command: {sql_query[:100]}...", flush=True)
             try:
                 with open('d:\\CPIXFINALWITHALLFEATURES\\debug_execution.txt', 'a') as f:
                     f.write(f"ENTRY: Executing SQL command: {sql_query}\\n")
@@ -1301,6 +1310,8 @@ class ConsoleService:
 
                             logger.info(
                                 f"Returning SELECT result: {len(decrypted_rows)} rows, {len(display_columns)} display columns")
+                            print(f"CONSOLE_SERVICE: Returning SELECT result: rows={len(decrypted_rows)}, cols={len(display_columns)}", flush=True)
+                            print(f"CONSOLE_SERVICE: First row: {decrypted_rows[0] if decrypted_rows else 'NO ROWS'}", flush=True)
                             return {
                                 "success": True,
                                 "command_type": "SQL",

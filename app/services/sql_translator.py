@@ -375,7 +375,19 @@ class SQLTranslator:
                 table_mapping = self.table_mappings[table_name]
             else:
                 # Try to extract table name from query
-                table_mapping = self._extract_table_mapping(query)
+                table_name = self._extract_table_name(query)
+                table_mapping = self.table_mappings.get(table_name)
+                
+            # DEBUG TRACE
+            try:
+                 with open(r'c:\Users\janga\TRENDYWALLPAPER\Cryptopix-Bridge\vds_debug.log', 'a') as f:
+                     if not table_mapping:
+                         f.write(f"TRANSLATE: No mapping found! Query={query[:50]}... Table={table_name}\n")
+                         f.write(f"TRANSLATE: Active Tables: {list(self.table_mappings.keys())}\n")
+                     else:
+                         enc_cols = list(table_mapping.encrypted_columns.keys())
+                         f.write(f"TRANSLATE: Found mapping for {table_name}. Encrypted cols: {enc_cols}\n")
+            except: pass
 
             # Translate based on query type
             if query_type == QueryType.SELECT:
@@ -456,6 +468,27 @@ class SQLTranslator:
             return QueryType.USE
         else:
             raise SQLTranslationError(f"Unable to determine query type for: {query[:50]}...")
+
+    def _extract_table_name(self, query: str) -> Optional[str]:
+        """Extract table name from query string"""
+        query_upper = query.upper()
+        
+        if query_upper.startswith('SELECT'):
+            from_match = re.search(r'\bFROM\s+`?([^\s,()` ]+)`?', query, re.IGNORECASE)
+            if from_match:
+                return from_match.group(1).strip('`')
+        elif query_upper.startswith(('INSERT', 'UPDATE', 'DELETE')):
+            if 'INSERT' in query_upper:
+                match = re.search(r'\bINSERT\s+INTO\s+`?([^\s(` ]+)`?', query, re.IGNORECASE)
+            elif 'UPDATE' in query_upper:
+                match = re.search(r'\bUPDATE\s+`?([^\s` ]+)`?', query, re.IGNORECASE)
+            elif 'DELETE' in query_upper:
+                match = re.search(r'\bDELETE\s+FROM\s+`?([^\s` ]+)`?', query, re.IGNORECASE)
+            
+            if match:
+                return match.group(1).strip('`')
+                
+        return None
 
     def _extract_table_mapping(self, query: str) -> Optional[TableMapping]:
         """Extract table name from query and get mapping"""
@@ -962,7 +995,7 @@ class SQLTranslator:
                 # Replace column references in expressions
                 # Use word boundaries to avoid partial matches
                 pattern = rf'\b{re.escape(col_name)}\b'
-                expression = re.sub(pattern, col_mapping.encrypted_name, expression)
+                expression = re.sub(pattern, col_mapping.encrypted_name, expression, flags=re.IGNORECASE)
 
         return expression
 
@@ -1061,17 +1094,19 @@ class SQLTranslator:
 
                 strategy = strategies.get(col_name, 'use_encrypted_data')
 
+                keyword_flags = re.IGNORECASE
+                
                 if strategy == 'use_tags' and col_mapping.tag_name:
                     # Use tags for filtering/sorting operations
-                    expression = re.sub(pattern, col_mapping.tag_name, expression)
+                    expression = re.sub(pattern, col_mapping.tag_name, expression, flags=keyword_flags)
                     logger.debug(f"Using tags for column {col_name} -> {col_mapping.tag_name}")
                 elif strategy == 'decrypt':
                     # Select encrypted column for decryption in results
-                    expression = re.sub(pattern, col_mapping.encrypted_name, expression)
+                    expression = re.sub(pattern, col_mapping.encrypted_name, expression, flags=keyword_flags)
                     logger.debug(f"Will decrypt column {col_name} -> {col_mapping.encrypted_name} (encrypted_name: {col_mapping.encrypted_name})")
                 else:
                     # Use encrypted data directly (no decryption needed)
-                    expression = re.sub(pattern, col_mapping.encrypted_name, expression)
+                    expression = re.sub(pattern, col_mapping.encrypted_name, expression, flags=keyword_flags)
                     logger.debug(f"Using encrypted data directly for column {col_name} -> {col_mapping.encrypted_name}")
 
         return expression
@@ -1169,7 +1204,8 @@ class SQLTranslator:
                 if col_mapping.is_encrypted and col_mapping.tag_name:
                     # Replace column = 'value' with tag_column = HMAC('value')
                     # Handle both quoted and unquoted values
-                    pattern = rf'\b{col_name}\s*=\s*(?:([\'"]([^\'"]+)[\'"])|\b([^\'"\s]+)\b)'
+                    col_pattern = rf'(?:`{re.escape(col_name)}`|\b{re.escape(col_name)}\b)'
+                    pattern = rf'{col_pattern}\s*=\s*(?:([\'"]([^\'"]+)[\'"])|\b([^\'"\s]+)\b)'
 
                     def replace_func(match):
                         if match.group(2):  # Quoted value
@@ -1201,14 +1237,15 @@ class SQLTranslator:
                             if text_tag != base_tag and text_tag not in tags:
                                 tags.append(text_tag)
                         
-                        if len(tags) > 1:
-                            logger.debug(f"Loose comparison active for column {col_name}: generated {len(tags)} tags for value '{value}'")
-                            tag_list = ", ".join([f"'{t}'" for t in tags])
-                            return f"{col_mapping.tag_name} IN ({tag_list})"
-                        else:
-                            return f"{col_mapping.tag_name} = '{tags[0]}'"
+                            if len(tags) > 1:
+                                logger.debug(f"Loose comparison active for column {col_name}: generated {len(tags)} tags for value '{value}'")
+                                tag_list = ", ".join([f"'{t}'" for t in tags])
+                                return f"{col_mapping.tag_name} IN ({tag_list})"
+                            else:
+                                return f"{col_mapping.tag_name} = '{tags[0]}'"
 
-                    where_clause = re.sub(pattern, replace_func, where_clause)
+                    # Perform replacement
+                    where_clause = re.sub(pattern, replace_func, where_clause, flags=re.IGNORECASE)
 
             if where_clause != original_where:
                 query = query.replace(f"WHERE {original_where}", f"WHERE {where_clause}")
@@ -1246,15 +1283,28 @@ class SQLTranslator:
                         # Use tags for WHERE clause filtering - this is the primary use case for tags
                         logger.debug(f"Using tags for WHERE filtering on column {col_name}")
 
+                        # Define column pattern with optional table prefix and backticks
+                        tbl_prefix = rf'(?:`?{re.escape(table_mapping.original_name)}`?\.)?' 
+                        col_part = rf'(?:`{re.escape(col_name)}`|\b{re.escape(col_name)}\b)'
+                        col_pattern = rf'{tbl_prefix}{col_part}'
+
                         # Handle equality comparisons: column = value
-                        eq_pattern = rf'\b{col_name}\s*=\s*(?:([\'"]([^\'"]+)[\'"])|\b([^\'"\s]+)\b)'
+                        # Supports quoted strings, numbers, and ? placeholders
+                        eq_pattern = rf'{col_pattern}\s*=\s*(?:([\'"]([^\'"]*)[\'"])|\b([^\'"\s]+)\b|(\?))'
 
                         def replace_eq_func(match):
-                            if match.group(2):  # Quoted value
+                            # Check what matched
+                            if match.group(2) is not None:  # Quoted value
                                 value = match.group(2)
-                            else:  # Unquoted value
+                            elif match.group(3) is not None:  # Unquoted value
                                 value = match.group(3)
+                            else:  # Placeholder ?
+                                value = "?"
                             
+                            # Handle placeholder case: just replace column name
+                            if value == "?":
+                                return f"{col_mapping.tag_name} = ?"
+
                             mapped_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
                             
                             # Generate tags for loose comparison
@@ -1265,7 +1315,6 @@ class SQLTranslator:
                             tags.append(base_tag)
                             
                             # If value looks like an integer, also try integer type tag
-                            # This handles the case where DB has integer but query treats as string or loose comparison
                             is_numeric = str(value).replace('.', '', 1).isdigit() or (str(value).startswith('-') and str(value)[1:].replace('.', '', 1).isdigit())
                             
                             if is_numeric and mapped_type != 'integer':
@@ -1273,7 +1322,7 @@ class SQLTranslator:
                                 if int_tag != base_tag:
                                     tags.append(int_tag)
                                         
-                            # If mapped type is not text, also try text type tag (for '1' vs 1 mismatches)
+                            # If mapped type is not text, also try text type tag
                             if mapped_type not in ['text', 'varchar', 'char']:
                                 text_tag = clwe_encryptor.generate_unified_tag(str(value), 'text')
                                 if text_tag != base_tag and text_tag not in tags:
@@ -1286,34 +1335,41 @@ class SQLTranslator:
                             else:
                                 return f"{col_mapping.tag_name} = '{tags[0]}'"
 
-                        where_clause = re.sub(eq_pattern, replace_eq_func, where_clause)
+                        where_clause = re.sub(eq_pattern, replace_eq_func, where_clause, flags=re.IGNORECASE)
 
                         # Handle LIKE operations: column LIKE 'pattern'
-                        like_pattern = rf'\b{col_name}\s+LIKE\s+([\'"]([^\'"]*)[\'"])'
+                        like_pattern = rf'{col_pattern}\s+LIKE\s+(?:([\'"]([^\'"]*)[\'"])|(\?))'
 
                         def replace_like_func(match):
+                            if match.group(3) == '?':
+                                return f"{col_mapping.tag_name} LIKE ?"
+                            
                             pattern = match.group(2)
                             # For LIKE, we need to handle pattern matching on tags
-                            # This is complex - for now, convert to equality if no wildcards
                             if '%' not in pattern and '_' not in pattern:
                                 data_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
                                 tag_value = clwe_encryptor.generate_unified_tag(pattern, data_type)
                                 return f"{col_mapping.tag_name} = '{tag_value}'"
                             else:
-                                # For patterns with wildcards, we can't use tags efficiently
-                                # Fall back to direct column comparison (less secure but functional)
                                 logger.warning(f"LIKE with wildcards on encrypted column {col_name} - using direct comparison (less secure)")
                                 return f"{col_mapping.encrypted_name} LIKE {match.group(1)}"
 
                         where_clause = re.sub(like_pattern, replace_like_func, where_clause, flags=re.IGNORECASE)
 
                         # Handle IN operations: column IN (value1, value2, ...)
-                        in_pattern = rf'\b{col_name}\s+IN\s*\(\s*([^)]+)\s*\)'
+                        in_pattern = rf'{col_pattern}\s+IN\s*\(\s*([^)]+)\s*\)'
 
                         def replace_in_func(match):
                             values_str = match.group(1)
                             # Parse values
                             values = []
+                            # Rudimentary split by comma, respecting quotes would be better but complex
+                            # Standard IN clause usually straightforward
+                            if '?' in values_str:
+                                # Contains placeholders, assume all are placeholders or specialized handling
+                                # Just replace column name
+                                return f"{col_mapping.tag_name} IN ({values_str})"
+                                
                             for val in values_str.split(','):
                                 val = val.strip().strip("'\"")
                                 if val:
@@ -1342,11 +1398,17 @@ class SQLTranslator:
                         where_clause = re.sub(in_pattern, replace_in_func, where_clause, flags=re.IGNORECASE)
 
                         # Handle BETWEEN operations: column BETWEEN value1 AND value2
-                        between_pattern = rf'\b{col_name}\s+BETWEEN\s+(.+?)\s+AND\s+(.+?)(?:\s|$)'
+                        between_pattern = rf'{col_pattern}\s+BETWEEN\s+(.+?)\s+AND\s+(.+?)(?:\s|$)'
 
                         def replace_between_func(match):
-                            val1 = match.group(1).strip().strip("'\"")
-                            val2 = match.group(2).strip().strip("'\"")
+                            val1_raw = match.group(1).strip()
+                            val2_raw = match.group(2).strip()
+                            
+                            if val1_raw == '?' or val2_raw == '?':
+                                return f"{col_mapping.tag_name} BETWEEN {val1_raw} AND {val2_raw}"
+
+                            val1 = val1_raw.strip("'\"")
+                            val2 = val2_raw.strip("'\"")
                             data_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
                             tag1 = clwe_encryptor.generate_unified_tag(val1, data_type)
                             tag2 = clwe_encryptor.generate_unified_tag(val2, data_type)
@@ -1356,21 +1418,29 @@ class SQLTranslator:
 
                         # Handle range operations: column > value, column < value, etc.
                         for op in ['>', '<', '>=', '<=', '!=', '<>']:
-                            range_pattern = rf'\b{col_name}\s*{re.escape(op)}\s*(?:([\'"]([^\'"]+)[\'"])|\b([^\'"\s]+)\b)'
+                            range_pattern = rf'{col_pattern}\s*{re.escape(op)}\s*(?:([\'"]([^\'"]+)[\'"])|\b([^\'"\s]+)\b|(\?))'
 
                             def replace_range_func(match, operator=op):
-                                if match.group(2):  # Quoted value
+                                # Check what matched
+                                if match.group(2) is not None:  # Quoted value
                                     value = match.group(2)
-                                else:  # Unquoted value
+                                elif match.group(3) is not None:  # Unquoted value
                                     value = match.group(3)
+                                else:  # Placeholder ?
+                                    value = "?"
+                                
+                                # Handle placeholder case
+                                if value == "?":
+                                    return f"{col_mapping.tag_name} {operator} ?"
+
                                 data_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
                                 tag_value = clwe_encryptor.generate_unified_tag(str(value), data_type)
                                 return f"{col_mapping.tag_name} {operator} '{tag_value}'"
 
-                            where_clause = re.sub(range_pattern, replace_range_func, where_clause)
+                            where_clause = re.sub(range_pattern, replace_range_func, where_clause, flags=re.IGNORECASE)
 
                         # Handle IS NULL / IS NOT NULL
-                        null_pattern = rf'\b{col_name}\s+IS\s+(NOT\s+)?NULL'
+                        null_pattern = rf'{col_pattern}\s+IS\s+(NOT\s+)?NULL'
 
                         def replace_null_func(match):
                             not_null = match.group(1)
@@ -1430,13 +1500,25 @@ class SQLTranslator:
                     filter_strategy = context.get('filter_strategies', {}).get(col_name, 'use_tags')
 
                     if filter_strategy == 'use_tags':
-                        eq_pattern = rf'\b{col_name}\s*=\s*(?:([\'"]([^\'"]+)[\'"])|\b([^\'"\s]+)\b)'
+                        # Define column pattern with optional table prefix and backticks
+                        tbl_prefix = rf'(?:`?{re.escape(table_mapping.original_name)}`?\.)?' 
+                        col_part = rf'(?:`{re.escape(col_name)}`|\b{re.escape(col_name)}\b)'
+                        col_pattern = rf'{tbl_prefix}{col_part}'
+
+                        # Support backticks and placeholders
+                        eq_pattern = rf'{col_pattern}\s*=\s*(?:([\'"]([^\'"]+)[\'"])|\b([^\'"\s]+)\b|(\?))'
 
                         def replace_eq_func(match):
-                            if match.group(2):  # Quoted value
+                            # Check what matched
+                            if match.group(2) is not None:  # Quoted value
                                 value = match.group(2)
-                            else:  # Unquoted value
+                            elif match.group(3) is not None:  # Unquoted value
                                 value = match.group(3)
+                            else:  # Placeholder ?
+                                value = "?"
+                            
+                            if value == "?":
+                                return f"{col_mapping.tag_name} = ?"
                             
                             mapped_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
                             
@@ -1469,7 +1551,7 @@ class SQLTranslator:
                             else:
                                 return f"{col_mapping.tag_name} = '{tags[0]}'"
 
-                        having_clause = re.sub(eq_pattern, replace_eq_func, having_clause)
+                        having_clause = re.sub(eq_pattern, replace_eq_func, having_clause, flags=re.IGNORECASE)
 
             # Reconstruct HAVING clause
             query = re.sub(r'HAVING\s+.+?(?=\s+(?:ORDER|LIMIT|$))', f'HAVING {having_clause}', query, flags=re.IGNORECASE | re.DOTALL)
@@ -1538,7 +1620,7 @@ class SQLTranslator:
                 # Check if this is an encrypted column and decide strategy
                 translated_col = col_part.strip()
                 for col_name, col_mapping in table_mapping.encrypted_columns.items():
-                    if col_mapping.is_encrypted and translated_col == col_name:
+                    if col_mapping.is_encrypted and translated_col.lower() == col_name.lower():
                         # For ORDER BY, use filter strategies (tags for encrypted columns)
                         filter_strategy = context.get('filter_strategies', {}).get(col_name, 'use_tags')
 

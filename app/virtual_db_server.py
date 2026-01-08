@@ -810,6 +810,14 @@ class VDSInstance:
                 database_url=self.encrypted_db_url,
                 migration_state=self.migration_state
             )
+            
+            # DEBUG: Log the result from console_service
+            row_count = len(result.get("rows", []))
+            col_count = len(result.get("columns", []))
+            logger.info(f"VDS _execute_query RESULT: success={result.get('success')}, query_type={result.get('query_type')}, rows={row_count}, cols={col_count}")
+            if row_count > 0:
+                logger.info(f"VDS _execute_query FIRST ROW: {result.get('rows', [])[0]}")
+            
             result["processed_by"] = f"VDS_Instance_{self.host}_{self.port}"
             result["connection_id"] = connection_id
             
@@ -1270,6 +1278,9 @@ class VDSInstance:
             
             # Build COM_STMT_PREPARE_OK response
             # Format: [header] status(0x00) stmt_id(4) num_columns(2) num_params(2) reserved(1) warning_count(2)
+            # Build COM_STMT_PREPARE_OK response
+            # Format: [header] status(0x00) stmt_id(4) num_columns(2) num_params(2) reserved(1) warning_count(2)
+            # Response packet starts with sequence_number (already incremented by caller)
             packets = [self._build_stmt_prepare_ok(stmt_id, num_params, sequence_number)]
             sequence_number = (sequence_number + 1) % 256
             
@@ -1340,11 +1351,15 @@ class VDSInstance:
             # Execute query first
             result = self._execute_query(final_sql, connection_id)
             
+            row_count = len(result.get("rows", []))
+            logger.info(f"VDS EXECUTE RESULT: row_count={row_count} success={result.get('success')} query_type={query_type}")
+            
             if not result.get("success", False):
                 return [self._build_mysql_error_packet(result.get("error", "Unknown error"), sequence_number)]
             
             if query_type in ("SELECT", "SHOW", "EXPLAIN"):
                 # Return Binary Result Set (required for COM_STMT_EXECUTE)
+                # sequence_number is already incremented by caller
                 return self._build_mysql_binary_result_set_packets(result, sequence_number)
             else:
                 # Return OK Packet
@@ -2362,6 +2377,9 @@ class VDSInstance:
             packet_length = len(packet_body)
             header = struct.pack('<I', packet_length)[:3] + bytes([sequence_number])
             
+            if sequence_number < 10: # Log first few packets only
+                logger.info(f"VDS BINARY ROW: seq={sequence_number} len={packet_length} cols={num_columns} values={values_data.hex()[:50]}...")
+
             return header + packet_body
             
         except Exception as e:
