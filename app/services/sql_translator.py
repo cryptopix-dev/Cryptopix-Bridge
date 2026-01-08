@@ -1176,9 +1176,37 @@ class SQLTranslator:
                             value = match.group(2)
                         else:  # Unquoted value
                             value = match.group(3)
-                        data_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
-                        tag_value = clwe_encryptor.generate_unified_tag(str(value), data_type)
-                        return f"{col_mapping.tag_name} = '{tag_value}'"
+                        
+                        mapped_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
+                        
+                        # Generate tags for loose comparison
+                        tags = []
+                        
+                        # Always include the mapped type
+                        base_tag = clwe_encryptor.generate_unified_tag(str(value), mapped_type)
+                        tags.append(base_tag)
+                        
+                        # If value looks like an integer, also try integer type tag
+                        # This handles the case where DB has integer but query treats as string or loose comparison
+                        is_numeric = str(value).replace('.', '', 1).isdigit() or (str(value).startswith('-') and str(value)[1:].replace('.', '', 1).isdigit())
+                        
+                        if is_numeric and mapped_type != 'integer':
+                            int_tag = clwe_encryptor.generate_unified_tag(str(value), 'integer')
+                            if int_tag != base_tag:
+                                tags.append(int_tag)
+                                    
+                        # If mapped type is not text, also try text type tag (for '1' vs 1 mismatches)
+                        if mapped_type not in ['text', 'varchar', 'char']:
+                            text_tag = clwe_encryptor.generate_unified_tag(str(value), 'text')
+                            if text_tag != base_tag and text_tag not in tags:
+                                tags.append(text_tag)
+                        
+                        if len(tags) > 1:
+                            logger.debug(f"Loose comparison active for column {col_name}: generated {len(tags)} tags for value '{value}'")
+                            tag_list = ", ".join([f"'{t}'" for t in tags])
+                            return f"{col_mapping.tag_name} IN ({tag_list})"
+                        else:
+                            return f"{col_mapping.tag_name} = '{tags[0]}'"
 
                     where_clause = re.sub(pattern, replace_func, where_clause)
 
@@ -1226,9 +1254,37 @@ class SQLTranslator:
                                 value = match.group(2)
                             else:  # Unquoted value
                                 value = match.group(3)
-                            data_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
-                            tag_value = clwe_encryptor.generate_unified_tag(str(value), data_type)
-                            return f"{col_mapping.tag_name} = '{tag_value}'"
+                            
+                            mapped_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
+                            
+                            # Generate tags for loose comparison
+                            tags = []
+                            
+                            # Always include the mapped type
+                            base_tag = clwe_encryptor.generate_unified_tag(str(value), mapped_type)
+                            tags.append(base_tag)
+                            
+                            # If value looks like an integer, also try integer type tag
+                            # This handles the case where DB has integer but query treats as string or loose comparison
+                            is_numeric = str(value).replace('.', '', 1).isdigit() or (str(value).startswith('-') and str(value)[1:].replace('.', '', 1).isdigit())
+                            
+                            if is_numeric and mapped_type != 'integer':
+                                int_tag = clwe_encryptor.generate_unified_tag(str(value), 'integer')
+                                if int_tag != base_tag:
+                                    tags.append(int_tag)
+                                        
+                            # If mapped type is not text, also try text type tag (for '1' vs 1 mismatches)
+                            if mapped_type not in ['text', 'varchar', 'char']:
+                                text_tag = clwe_encryptor.generate_unified_tag(str(value), 'text')
+                                if text_tag != base_tag and text_tag not in tags:
+                                    tags.append(text_tag)
+                            
+                            if len(tags) > 1:
+                                logger.debug(f"Loose comparison active for column {col_name}: generated {len(tags)} tags for value '{value}'")
+                                tag_list = ", ".join([f"'{t}'" for t in tags])
+                                return f"{col_mapping.tag_name} IN ({tag_list})"
+                            else:
+                                return f"{col_mapping.tag_name} = '{tags[0]}'"
 
                         where_clause = re.sub(eq_pattern, replace_eq_func, where_clause)
 
@@ -1261,9 +1317,23 @@ class SQLTranslator:
                             for val in values_str.split(','):
                                 val = val.strip().strip("'\"")
                                 if val:
-                                    data_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
-                                    tag_value = clwe_encryptor.generate_unified_tag(val, data_type)
-                                    values.append(f"'{tag_value}'")
+                                    mapped_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
+                                    
+                                    # Add base tag
+                                    tags_for_val = set()
+                                    tags_for_val.add(clwe_encryptor.generate_unified_tag(val, mapped_type))
+                                    
+                                    # Loose comparison tags
+                                    is_numeric = val.replace('.', '', 1).isdigit() or (val.startswith('-') and val[1:].replace('.', '', 1).isdigit())
+                                    
+                                    if is_numeric and mapped_type != 'integer':
+                                        tags_for_val.add(clwe_encryptor.generate_unified_tag(val, 'integer'))
+                                    
+                                    if mapped_type not in ['text', 'varchar', 'char']:
+                                        tags_for_val.add(clwe_encryptor.generate_unified_tag(val, 'text'))
+                                        
+                                    for t in tags_for_val:
+                                        values.append(f"'{t}'")
 
                             if values:
                                 return f"{col_mapping.tag_name} IN ({', '.join(values)})"
@@ -1367,9 +1437,37 @@ class SQLTranslator:
                                 value = match.group(2)
                             else:  # Unquoted value
                                 value = match.group(3)
-                            data_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
-                            tag_value = clwe_encryptor.generate_unified_tag(str(value), data_type)
-                            return f"{col_mapping.tag_name} = '{tag_value}'"
+                            
+                            mapped_type = str(col_mapping.data_type) if col_mapping.data_type else "text"
+                            
+                            # Generate tags for loose comparison
+                            tags = []
+                            
+                            # Always include the mapped type
+                            base_tag = clwe_encryptor.generate_unified_tag(str(value), mapped_type)
+                            tags.append(base_tag)
+                            
+                            # If value looks like an integer, also try integer type tag
+                            # This handles the case where DB has integer but query treats as string or loose comparison
+                            is_numeric = str(value).replace('.', '', 1).isdigit() or (str(value).startswith('-') and str(value)[1:].replace('.', '', 1).isdigit())
+                            
+                            if is_numeric and mapped_type != 'integer':
+                                int_tag = clwe_encryptor.generate_unified_tag(str(value), 'integer')
+                                if int_tag != base_tag:
+                                    tags.append(int_tag)
+                                        
+                            # If mapped type is not text, also try text type tag (for '1' vs 1 mismatches)
+                            if mapped_type not in ['text', 'varchar', 'char']:
+                                text_tag = clwe_encryptor.generate_unified_tag(str(value), 'text')
+                                if text_tag != base_tag and text_tag not in tags:
+                                    tags.append(text_tag)
+                            
+                            if len(tags) > 1:
+                                logger.debug(f"Loose comparison active for column {col_name}: generated {len(tags)} tags for value '{value}'")
+                                tag_list = ", ".join([f"'{t}'" for t in tags])
+                                return f"{col_mapping.tag_name} IN ({tag_list})"
+                            else:
+                                return f"{col_mapping.tag_name} = '{tags[0]}'"
 
                         having_clause = re.sub(eq_pattern, replace_eq_func, having_clause)
 

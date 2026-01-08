@@ -1558,7 +1558,8 @@ class VDSInstance:
             # 1 byte: reserved (0x00)
             # 2 bytes: warning_count (0)
             
-            payload = struct.pack('<BIHBH',
+            # Fixed format string to match 6 arguments (B, I, H, H, B, H)
+            payload = struct.pack('<BIHHBH',
                 0x00,           # OK
                 stmt_id,        # statement_id
                 0,              # num_columns (we'll set to 0 for simplicity)
@@ -1754,6 +1755,9 @@ class VDSInstance:
                 columns = result.get("columns", [])
                 column_types = result.get("column_types", {})
 
+                # MySQL Text Protocol (COM_QUERY) Result Set
+                rows = result.get("rows", [])
+                
                 if not columns:
                     # No columns - return OK packet
                     packets.append(
@@ -1803,6 +1807,14 @@ class VDSInstance:
             return [self._build_mysql_error_packet(start_sequence, str(e))]
 
         return packets
+
+    def _build_mysql_column_count_packet(self, column_count: int, sequence_number: int) -> bytes:
+        """Build column count packet"""
+        packet = self._encode_length_encoded_int(column_count)
+        packet_length = len(packet)
+        header = struct.pack('<I', packet_length)[
+            :3] + bytes([sequence_number])
+        return header + packet
 
     def _build_mysql_column_definition_packet(self, column_name: str, sequence_number: int, col_type: int = 0xfd) -> bytes:
         """Build MySQL column definition packet with simplified format"""
@@ -1932,64 +1944,102 @@ class VDSInstance:
             return b'\xfe' + struct.pack('<Q', value)
 
     def _decrypt_value_for_vds(self, col_name: str, value: Any, column_type=None, table_name: str = None) -> Any:
+        """Decrypt and convert values for VDS transmission to clients"""
         try:
             # Skip tag columns
             if col_name.startswith('tag_'):
                 return None
 
-            # Preserve native types for Binary Protocol
-            if isinstance(value, (int, float, bool)) and not table_name:
-                return value
-
             # If value is None, return None
             if value is None:
                 return None
 
-            decrypted_value = value
+            # Preserve native types for non-encrypted columns
+            if isinstance(value, (int, float, bool)) and not isinstance(value, bytes):
+                logger.debug(f"VDS: Column {col_name} has native type {type(value).__name__}, preserving")
+                return value
 
-            # If value is already a string, check if it's actually encrypted hex data
-            if isinstance(value, str):
+            decrypted_value = value
+            was_decrypted = False
+
+            # If value is bytes, it needs decryption
+            if isinstance(value, bytes):
+                try:
+                    logger.info(f"VDS DECRYPT: Attempting to decrypt bytes in {col_name} (size: {len(value)})")
+                    decrypted_value = clwe_encryptor.decrypt_value(
+                        value, settings.CRYPTOPIX_DEFAULT_PASSWORD)
+                    was_decrypted = True
+                    logger.info(f"VDS DECRYPT: Successfully decrypted {col_name}, result type: {type(decrypted_value).__name__}")
+                    
+                    # If decrypted value is bytes, try to decode it
+                    if isinstance(decrypted_value, bytes):
+                        try:
+                            decrypted_value = decrypted_value.decode('utf-8')
+                            logger.debug(f"VDS: Decoded bytes to string for {col_name}")
+                        except UnicodeDecodeError:
+                            # Keep as bytes if it can't be decoded
+                            logger.warning(f"VDS: Could not decode bytes for {col_name}, keeping as bytes")
+                    
+                except Exception as e:
+                    logger.warning(f"VDS DECRYPT: Failed to decrypt bytes in {col_name}: {e}, treating as non-encrypted")
+                    # If decryption fails, the data might not be encrypted
+                    try:
+                        # Try to decode as UTF-8
+                        decrypted_value = value.decode('utf-8')
+                    except UnicodeDecodeError:
+                        # If can't decode, convert to hex string
+                        decrypted_value = value.hex()
+                        logger.debug(f"VDS: Converted non-UTF8 bytes to hex for {col_name}")
+            
+            # If value is a string, check if it's encrypted hex data
+            elif isinstance(value, str):
                 # Check if it's a hex string that represents encrypted data
                 if len(value) > 100 and len(value) % 2 == 0 and all(c in '0123456789abcdefABCDEF' for c in value):
                     try:
                         hex_bytes = bytes.fromhex(value)
+                        # Check for CLWE encryption markers
                         if hex_bytes.startswith(b'RIFF') and b'WEBP' in hex_bytes[:20]:
-                            logger.info(
-                                f"VDS DECRYPT: Found encrypted hex WebP data in {col_name}")
+                            logger.info(f"VDS DECRYPT: Found encrypted hex WebP data in {col_name}")
                             decrypted_value = clwe_encryptor.decrypt_value(
                                 hex_bytes, settings.CRYPTOPIX_DEFAULT_PASSWORD)
-                            decrypted_value = str(decrypted_value)
+                            was_decrypted = True
+                            
+                            # Convert to string if it's bytes
+                            if isinstance(decrypted_value, bytes):
+                                try:
+                                    decrypted_value = decrypted_value.decode('utf-8')
+                                except UnicodeDecodeError:
+                                    decrypted_value = decrypted_value.hex()
+                            else:
+                                decrypted_value = str(decrypted_value)
                     except Exception as e:
-                        logger.debug(
-                            f"VDS DECRYPT: Hex string in {col_name} not encrypted")
+                        logger.debug(f"VDS DECRYPT: Hex string in {col_name} not encrypted: {e}")
             
-            # If value is bytes, it needs decryption
-            elif isinstance(value, bytes):
-                try:
-                    logger.info(
-                        f"VDS DECRYPT: Decrypting bytes data in {col_name} (size: {len(value)})")
-                    decrypted_value = clwe_encryptor.decrypt_value(
-                        value, settings.CRYPTOPIX_DEFAULT_PASSWORD)
-                    logger.info(
-                        f"VDS DECRYPT: Successfully decrypted {col_name}")
-                    decrypted_value = str(decrypted_value)
-                except Exception as e:
-                    logger.error(
-                        f"VDS DECRYPT: Failed to decrypt bytes in {col_name}: {e}")
-                    decrypted_value = value.hex()
-            
-            # Apply type conversion using the new module
+            # Apply type conversion using the type converter module
             if table_name and col_name:
-                decrypted_value = type_converter.intercept_and_convert(
-                    decrypted_value, col_name, table_name, 
-                    schema_type=column_type,
-                    migration_state=getattr(self, 'migration_state', None)
-                )
+                try:
+                    converted_value = type_converter.intercept_and_convert(
+                        decrypted_value, col_name, table_name, 
+                        schema_type=column_type,
+                        migration_state=getattr(self, 'migration_state', None)
+                    )
+                    if converted_value != decrypted_value:
+                        logger.debug(f"VDS: Type converted {col_name} from {type(decrypted_value).__name__} to {type(converted_value).__name__}")
+                    decrypted_value = converted_value
+                except Exception as e:
+                    logger.warning(f"VDS: Type conversion failed for {col_name}: {e}, using decrypted value")
+            
+            # Final logging
+            if was_decrypted:
+                logger.info(f"VDS: Column {col_name} decrypted and ready for transmission, type: {type(decrypted_value).__name__}")
             
             return decrypted_value
         
         except Exception as e:
-            logger.error(f"VDS DECRYPT error in {col_name}: {e}")
+            logger.error(f"VDS DECRYPT: Critical error in {col_name}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            # Return original value as fallback
             return value
 
     def _build_mysql_data_row_packet(self, row: Dict[str, Any], columns: List[str], sequence_number: int, column_types: Dict[str, int] = None, table_name: str = None) -> bytes:
@@ -1997,6 +2047,8 @@ class VDSInstance:
         try:
             packet = b""
             column_types = column_types or {}
+            
+            logger.debug(f"VDS: Building row packet for table {table_name}, columns: {columns}")
 
             for col_name in columns:
                 value = row.get(col_name, None)
@@ -2005,16 +2057,27 @@ class VDSInstance:
                 if value is None:
                     # NULL is represented as 0xFB (251) in MySQL protocol
                     packet += b'\xfb'
+                    logger.debug(f"VDS: Column {col_name} is NULL")
                 else:
                     # Get column type code from metadata tuple
                     col_meta = column_types.get(col_name, (0xfd, 255, 0))
                     col_type = col_meta[0] if isinstance(col_meta, tuple) else col_meta
                     
+                    # Log original value type
+                    logger.debug(f"VDS: Column {col_name} original value type: {type(value).__name__}, MySQL type: {col_type}")
+                    
                     # Decrypt the value first
                     decrypted_val = self._decrypt_value_for_vds(col_name, value, col_type, table_name)
+                    
+                    # Log decrypted value
+                    if decrypted_val != value:
+                        logger.debug(f"VDS: Column {col_name} decrypted, new type: {type(decrypted_val).__name__}")
 
                     # Convert to proper type based on column metadata
                     final_bytes = self._convert_value_to_mysql_bytes(decrypted_val, col_name, col_type)
+                    
+                    # Log final bytes size
+                    logger.debug(f"VDS: Column {col_name} encoded to {len(final_bytes)} bytes")
 
                     # Length-encoded: proper encoding for any length
                     packet += self._encode_length_encoded_int(len(final_bytes)) + final_bytes
@@ -2022,12 +2085,12 @@ class VDSInstance:
             packet_length = len(packet)
             header = struct.pack('<I', packet_length)[:3] + bytes([sequence_number])
 
-            logger.debug(
-                f"Built data row packet: seq={sequence_number}, content_length={packet_length}")
+            logger.info(
+                f"VDS: Built data row packet for {table_name}: seq={sequence_number}, content_length={packet_length}, columns={len(columns)}")
             return header + packet
 
         except Exception as e:
-            logger.error(f"Error building data row packet: {e}")
+            logger.error(f"VDS ERROR: Failed to build data row packet for {table_name}: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return b""
@@ -2125,8 +2188,16 @@ class VDSInstance:
                 return str(value).encode('utf-8')
             
             elif isinstance(value, bytes):
-                # Already bytes, return as-is
-                return value
+                # Bytes data: try to decode to UTF-8 first for text data
+                try:
+                    # Try to decode as UTF-8 text
+                    decoded = value.decode('utf-8')
+                    logger.debug(f"VDS: Decoded bytes to UTF-8 string for {col_name}")
+                    return decoded.encode('utf-8')
+                except UnicodeDecodeError:
+                    # Binary data that can't be decoded - return as-is
+                    logger.debug(f"VDS: Keeping binary data as-is for {col_name}")
+                    return value
             
             elif isinstance(value, str):
                 # String: try to detect if it's a numeric string and preserve type
@@ -2186,10 +2257,11 @@ class VDSInstance:
                 sequence_number = (sequence_number + 1) % 256
 
                 # Column definition packets
+                # Force all columns to VAR_STRING (0xfd) for PHP compatibility
+                # This matches our string-based encoding in the binary data packets
                 for col_name in columns:
-                    col_meta = column_types.get(col_name, (0xfd, 255, 0))
-                    if isinstance(col_meta, int):
-                        col_meta = (col_meta, 255, 0)
+                    # Always use VAR_STRING type regardless of actual column type
+                    col_meta = (0xfd, 255, 0)
                     
                     col_def_packet = self._build_mysql_column_definition_packet(
                         col_name, sequence_number, col_meta[0], col_meta[1], col_meta[2])
@@ -2203,6 +2275,7 @@ class VDSInstance:
 
                 # Binary Data row packets
                 table_name = result.get("table_name")
+                rows = result.get("rows", [])
                 for row in rows:
                     try:
                         row_packet = self._build_mysql_binary_data_row_packet(row, columns, sequence_number, column_types, table_name)
@@ -2265,45 +2338,23 @@ class VDSInstance:
                     # Decrypt/Process value
                     final_val = self._decrypt_value_for_vds(col_name, value, col_type, table_name)
                     
+                    # SIMPLIFIED BINARY PROTOCOL: Use string encoding for ALL types
+                    # This ensures maximum compatibility with PHP clients (PDO, MySQLi)
+                    # PHP's dynamic typing works best with string representations
                     try:
-                        # Numeric Types
-                        if col_type == 0x01: # TINYINT
-                            values_data += struct.pack('<b', int(final_val))
-                        elif col_type == 0x02: # SHORT (SMALLINT)
-                            values_data += struct.pack('<h', int(final_val))
-                        elif col_type == 0x03: # LONG (INT)
-                            values_data += struct.pack('<i', int(final_val))
-                        elif col_type == 0x08: # LONGLONG (BIGINT)
-                            values_data += struct.pack('<q', int(final_val))
-                        elif col_type == 0x04: # FLOAT
-                            values_data += struct.pack('<f', float(final_val))
-                        elif col_type == 0x05: # DOUBLE
-                            values_data += struct.pack('<d', float(final_val))
-                        
-                        # Date/Time Types (Simplified packing, usually needs full parsing)
-                        # For now, if we receive date objects, we should pack them. 
-                        # If string, we might need to parse.
-                        # Using string fallback for now unless we are sure.
-                        
-                        # String/Binary Types
+                        # Convert all values to string representation
+                        if isinstance(final_val, bytes):
+                            values_data += self._encode_length_encoded_int(len(final_val)) + final_val
                         else:
-                            # VARCHAR, VAR_STRING, STRING, BLOB, etc.
-                            if isinstance(final_val, bytes):
-                                values_data += self._encode_length_encoded_int(len(final_val)) + final_val
-                            else:
-                                str_val = str(final_val)
-                                encoded_val = str_val.encode('utf-8')
-                                values_data += self._encode_length_encoded_int(len(encoded_val)) + encoded_val
+                            # Convert to string (handles int, float, datetime, etc.)
+                            str_val = str(final_val)
+                            encoded_val = str_val.encode('utf-8')
+                            values_data += self._encode_length_encoded_int(len(encoded_val)) + encoded_val
                             
                     except Exception as e:
-                        logger.warning(f"Failed to binary pack column {col_name} (type {col_type}) value {final_val}: {e}")
-                        # Fallback to string handling
-                        if isinstance(final_val, bytes):
-                             values_data += self._encode_length_encoded_int(len(final_val)) + final_val
-                        else:
-                             str_val = str(final_val)
-                             encoded_val = str_val.encode('utf-8')
-                             values_data += self._encode_length_encoded_int(len(encoded_val)) + encoded_val
+                        logger.warning(f"Failed to encode column {col_name} value {final_val}: {e}")
+                        # Fallback to empty string
+                        values_data += b'\x00'
 
             packet_body += null_bitmap + values_data
             
@@ -2551,13 +2602,7 @@ class VDSInstance:
             logger.error(f"Failed to build OK packet: {e}")
             return b""
 
-    def _build_mysql_error_packet(self, error_message: str) -> bytes:
-        error_data = bytes([ERR_PACKET])
-        error_data += b'\x00\x00'
-        error_data += b'#00000'
-        error_data += error_message.encode('utf-8')
-        header = struct.pack('<I', len(error_data))[:3] + bytes([1])
-        return header + error_data
+
 
     def _build_mysql_result_set_packets(self, result: Dict[str, Any], start_sequence: int = 1) -> bytes:
         try:
@@ -4241,6 +4286,7 @@ class VirtualDatabaseServer:
                 try:
                     client_socket, client_address = self.server_socket.accept()
                     logger.info(f"New MySQL connection from {client_address}")
+                    print(f"VDS_CONNECTION: New client from {client_address[0]}:{client_address[1]}", flush=True)
 
                     # Handle connection in a separate thread
                     connection_id = self.connection_counter
@@ -4456,6 +4502,7 @@ class VirtualDatabaseServer:
                                 'utf-8', errors='ignore')
                             logger.info(
                                 f"Query from {connection_id}: {query[:100]}...")
+                            print(f"VDS_QUERY: Connection {connection_id} -> {query}", flush=True)
 
                             response_packets = self._process_mysql_query(
                                 query, connection_id, sequence_number)
