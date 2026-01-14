@@ -342,8 +342,6 @@ class ConsoleService:
         """
         try:
             instance_id = id(self)
-            print(f"CONSOLE_SERVICE[{instance_id}] execute_command ENTRY: command={command[:100]}, user_id={user_id}", flush=True)
-            logger.info(f"CONSOLE_SERVICE[{instance_id}] execute_command ENTRY: command={command[:100]}, user_id={user_id}")
             # Load migration state from files if not provided
             if migration_state is None:
                 migration_state = self._load_migration_state_from_files(
@@ -374,18 +372,19 @@ class ConsoleService:
                 command_type, parsed_command = self._parse_command(
                     statements[0])
                 
-                print(f"DEBUG_STDOUT: Parsed command '{statements[0]}' as Type: {command_type}", flush=True)
+                
+                logger.debug(f"DEBUG_STDOUT: Parsed command '{statements[0]}' as Type: {command_type}")
 
                 if command_type == CommandType.SQL:
                     result = self._execute_sql_command(parsed_command, user_id, database_url)
-                    print(f"CONSOLE_SERVICE[{instance_id}] RETURNING SQL result: success={result.get('success')}, rows={len(result.get('rows', []))}, cols={len(result.get('columns', []))}", flush=True)
+                    logger.debug(f"CONSOLE_SERVICE[{instance_id}] RETURNING SQL result: success={result.get('success')}, rows={len(result.get('rows', []))}, cols={len(result.get('columns', []))}")
                     return result
                 elif command_type == CommandType.ADMIN:
                     result = self._execute_admin_command(parsed_command, user_id)
-                    print(f"CONSOLE_SERVICE[{instance_id}] RETURNING ADMIN result: success={result.get('success')}", flush=True)
+                    logger.debug(f"CONSOLE_SERVICE[{instance_id}] RETURNING ADMIN result: success={result.get('success')}")
                     return result
                 else:
-                    print(f"CONSOLE_SERVICE[{instance_id}] RETURNING UNKNOWN command type", flush=True)
+                    logger.warning(f"CONSOLE_SERVICE[{instance_id}] RETURNING UNKNOWN command type")
                     return {
                         "success": False,
                         "error": f"Unknown command type: {command}",

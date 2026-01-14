@@ -760,10 +760,8 @@ class VDSInstance:
             logger.info(f"Processing {query_type} query: {query[:50]}...")
             
             # DEBUG TRACE
-            try:
-                 with open('d:\\CPIXFINALWITHALLFEATURES\\debug_vds.txt', 'a') as f:
-                     f.write(f"VDS Process: {query} -> Type: {query_type}\\n")
-            except: pass
+            # DEBUG TRACE
+            logger.debug(f"VDS Process: {query} -> Type: {query_type}")
             
             if query_type == "SELECT":
                 result = self._execute_query(query, connection_id)
@@ -890,10 +888,9 @@ class VDSInstance:
             # First, try to get types from migration state (preferred method)
             if self.migration_state:
                 try:
-                    with open(r'c:\Users\potte\OneDrive\Documents\GitHub\Cryptopix-Bridge\vds_trace.txt', 'a') as f:
-                        f.write(f"VDS State Check: keys={list(self.migration_state.keys())}\n")
-                        if 'table_configs' in self.migration_state:
-                             f.write(f"VDS Configs: {list(self.migration_state['table_configs'].keys())}\n")
+                     logger.debug(f"VDS State Check: keys={list(self.migration_state.keys())}")
+                     if 'table_configs' in self.migration_state:
+                          logger.debug(f"VDS Configs: {list(self.migration_state['table_configs'].keys())}")
                 except: pass
                 
                 # Case-insensitive table name lookup
@@ -919,8 +916,7 @@ class VDSInstance:
                     # Handle both structures: nested columns or flat mapping
                     col_source = table_info.get('columns', table_info) if isinstance(table_info, dict) else {}
                     try:
-                        with open(r'c:\Users\potte\OneDrive\Documents\GitHub\Cryptopix-Bridge\vds_trace.txt', 'a') as f:
-                            f.write(f"VDS Type Lookup: Table '{table_name}' found. Columns in state: {list(col_source.keys())}\n")
+                        logger.debug(f"VDS Type Lookup: Table '{table_name}' found. Columns in state: {list(col_source.keys())}")
                     except: pass
                     
                     for col_name in columns:
@@ -934,8 +930,7 @@ class VDSInstance:
                             metadata = self._get_mysql_type_metadata_from_string(type_str)
                             result_column_types[col_name] = metadata
                             try:
-                                with open(r'c:\Users\potte\OneDrive\Documents\GitHub\Cryptopix-Bridge\vds_trace.txt', 'a') as f:
-                                    f.write(f"VDS Type match: {col_name} | info={col_info} | type_str={type_str} | Meta={metadata}\n")
+                                logger.debug(f"VDS Type match: {col_name} | info={col_info} | type_str={type_str} | Meta={metadata}")
                             except: pass
                         elif col_info:
                             # String fallback
@@ -943,13 +938,11 @@ class VDSInstance:
                             metadata = self._get_mysql_type_metadata_from_string(type_str)
                             result_column_types[col_name] = metadata
                             try:
-                                with open(r'c:\Users\potte\OneDrive\Documents\GitHub\Cryptopix-Bridge\vds_trace.txt', 'a') as f:
-                                    f.write(f"VDS Type match (non-dict): {col_name} | val={type_str} | Meta={metadata}\n")
+                                logger.debug(f"VDS Type match (non-dict): {col_name} | val={type_str} | Meta={metadata}")
                             except: pass
                         else:
                             try:
-                                with open(r'c:\Users\potte\OneDrive\Documents\GitHub\Cryptopix-Bridge\vds_trace.txt', 'a') as f:
-                                    f.write(f"VDS Type MISS: {col_name} not in col_source or missing type info\n")
+                                logger.debug(f"VDS Type MISS: {col_name} not in col_source or missing type info")
                             except: pass
                             result_column_types[col_name] = (MYSQL_TYPE_VAR_STRING, 255, 0)
                     
