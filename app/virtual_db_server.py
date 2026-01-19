@@ -734,23 +734,98 @@ class VDSInstance:
             logger.error(f"Error handling MySQL connection {connection_id}: {e}")
 
     def _process_mysql_handshake_response(self, packet_body: bytes, connection_id: int) -> bool:
-        """Process the handshake response from client"""
+        """Process the handshake response from client with OTP verification"""
         try:
             if len(packet_body) < 32:
                 logger.warning(f"Handshake response too short: {len(packet_body)}")
                 return False
             
+            # Parse MySQL handshake response packet
+            # Format: capability flags (4 bytes) + max packet size (4 bytes) + charset (1 byte) + reserved (23 bytes) = 32 bytes
+            # Then: username (null-terminated) + auth response length + auth response + database (null-terminated)
+            
             idx = 32
+            
+            # Extract username (null-terminated string)
             user_end = packet_body.find(b'\x00', idx)
-            if user_end != -1:
-                username = packet_body[idx:user_end].decode('utf-8', errors='ignore')
+            if user_end == -1:
+                logger.warning("Invalid handshake: username not found")
+                return False
+            
+            username = packet_body[idx:user_end].decode('utf-8', errors='ignore')
+            idx = user_end + 1
+            
+            # Extract password/auth response
+            # In MySQL protocol, this is length-encoded
+            password = ""
+            otp_code = None
+            
+            if idx < len(packet_body):
+                auth_length = packet_body[idx]
+                idx += 1
+                
+                if idx + auth_length <= len(packet_body):
+                    auth_data = packet_body[idx:idx + auth_length]
+                    idx += auth_length
+                    
+                    # Try to decode auth data
+                    # Format can be: "password" or "password:otp"
+                    try:
+                        auth_string = auth_data.decode('utf-8', errors='ignore')
+                        
+                        # Check if OTP is included (separated by colon)
+                        if ':' in auth_string:
+                            password, otp_code = auth_string.split(':', 1)
+                        else:
+                            password = auth_string
+                    except:
+                        # If decoding fails, treat as raw password
+                        password = auth_data.decode('latin-1', errors='ignore')
+            
+            # Get client IP address
+            ip_address = None
+            if connection_id in self.active_connections:
+                ip_address = self.active_connections[connection_id].get('address', [None])[0]
+            
+            logger.info(f"Connection {connection_id}: Authenticating user '{username}' (OTP: {'provided' if otp_code else 'not provided'})")
+            
+            # Check VDS mode - client app handles OTP verification
+            from app.config.vds_mode import vds_mode
+            
+            if vds_mode.is_passthrough_mode():
+                # PASSTHROUGH MODE: Client app handles OTP verification
+                # VDS acts as transparent proxy without OTP verification
+                logger.info(f"Connection {connection_id}: Passthrough mode - accepting connection for '{username}'")
+                
+                # Optionally strip OTP from password if configured
+                if vds_mode.should_strip_otp() and otp_code:
+                    logger.debug(f"Connection {connection_id}: Stripped OTP from password in passthrough mode")
+                
+                # Mark as authenticated (client already verified OTP)
                 if connection_id in self.active_connections:
                     self.active_connections[connection_id]['username'] = username
-                logger.info(f"Connection {connection_id} authenticated as user '{username}'")
+                    self.active_connections[connection_id]['authenticated'] = True
                 
-            return True
+                logger.info(f"Connection {connection_id}: User '{username}' authenticated in passthrough mode")
+                return True
+            
+            else:
+                # STANDALONE/HYBRID MODE: VDS handles OTP verification
+                # This mode requires otp_service.py
+                logger.warning(f"Connection {connection_id}: VDS OTP mode is '{vds_mode.VDS_OTP_MODE}' but OTP service is disabled")
+                logger.warning(f"Connection {connection_id}: Please set VDS_OTP_MODE=passthrough in .env file")
+                
+                # For safety, accept connection in passthrough mode
+                if connection_id in self.active_connections:
+                    self.active_connections[connection_id]['username'] = username
+                    self.active_connections[connection_id]['authenticated'] = True
+                
+                return True
+                
         except Exception as e:
             logger.error(f"Error processing handshake response: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
 
     def _process_mysql_query(self, query: str, connection_id: int, sequence_number: int) -> List[bytes]:
