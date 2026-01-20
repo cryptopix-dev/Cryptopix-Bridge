@@ -2641,14 +2641,21 @@ def create_encrypted_schema():
             source_column_types = {col['name']: col['type']
                                    for col in source_columns}
 
-            # Get constraints from source database
+            # Get constraints and indexes from source database
             pk_constraint = inspector.get_pk_constraint(table_name)
             unique_constraints = inspector.get_unique_constraints(table_name)
+            indexes = inspector.get_indexes(table_name)
 
             # Build encrypted table schema with original column names
             columns = []
             primary_keys = []
-            unique_indexes = []
+            indexes_to_create = []  # Store index creation statements
+            
+            # Track which columns are encrypted to skip indexes on them
+            encrypted_columns = set()
+            for col_name, col_config in config.items():
+                if col_config.get('type') == 'encrypt':
+                    encrypted_columns.add(col_name)
 
             for col_name, col_config in config.items():
                 if col_config['type'] == 'encrypt':
@@ -2662,6 +2669,14 @@ def create_encrypted_schema():
                         logger.error(error_msg)
                         raise Exception(error_msg)
                     
+                    # Safety check: encrypted columns should never be in unique constraints
+                    for unique_constraint in unique_constraints:
+                        if col_name in unique_constraint.get('column_names', []):
+                            logger.warning(
+                                f"WARNING: Column '{col_name}' in table '{table_name}' is configured for encryption "
+                                f"but has a UNIQUE constraint. Unique constraints on encrypted columns will be skipped."
+                            )
+                    
                     # Encrypted columns: use appropriate BLOB type for target database
                     if target_db_type == "postgresql":
                         blob_type = "BYTEA"
@@ -2670,7 +2685,6 @@ def create_encrypted_schema():
 
                     columns.append(f"{col_name} {blob_type}")
                     columns.append(f"tag_{col_name} TEXT")
-
 
                 else:
                     # Normal columns: preserve original type and auto-increment
@@ -2735,15 +2749,91 @@ def create_encrypted_schema():
                     if pk_constraint and col_name in pk_constraint.get('constrained_columns', []):
                         primary_keys.append(col_name)
 
-                    # Preserve unique constraints for normal columns
-                    for unique_constraint in unique_constraints:
-                        if col_name in unique_constraint.get('column_names', []):
-                            unique_indexes.append(
-                                f"CREATE UNIQUE INDEX idx_{table_name}_{col_name} ON {table_name}({col_name})")
-
             # Add primary key constraint if any
             if primary_keys:
                 columns.append(f"PRIMARY KEY ({', '.join(primary_keys)})")
+
+            # Process UNIQUE constraints (handle composite unique constraints correctly)
+            processed_unique_constraints = set()  # Track which constraints we've already processed
+            for unique_constraint in unique_constraints:
+                constraint_name = unique_constraint.get('name', '')
+                constraint_columns = unique_constraint.get('column_names', [])
+                
+                # Skip if already processed or if constraint identifier is empty
+                constraint_id = f"{constraint_name}_{','.join(sorted(constraint_columns))}"
+                if constraint_id in processed_unique_constraints:
+                    continue
+                processed_unique_constraints.add(constraint_id)
+                
+                # Filter out encrypted columns from the constraint
+                normal_columns_in_constraint = [col for col in constraint_columns if col not in encrypted_columns]
+                
+                # Skip if no normal columns remain
+                if not normal_columns_in_constraint:
+                    logger.warning(
+                        f"Skipping unique constraint '{constraint_name}' on table '{table_name}' "
+                        f"because all columns are encrypted: {constraint_columns}"
+                    )
+                    continue
+                
+                # Create the unique index with proper column list (preserve composite nature)
+                if len(normal_columns_in_constraint) == 1:
+                    # Single column unique index
+                    index_name = f"idx_{table_name}_{normal_columns_in_constraint[0]}"
+                else:
+                    # Multi-column unique index - preserve original name if available
+                    index_name = constraint_name if constraint_name else f"idx_{table_name}_{'_'.join(normal_columns_in_constraint)}"
+                
+                unique_index_sql = f"CREATE UNIQUE INDEX {index_name} ON {table_name}({', '.join(normal_columns_in_constraint)})"
+                indexes_to_create.append({
+                    'sql': unique_index_sql,
+                    'name': index_name,
+                    'type': 'unique',
+                    'columns': normal_columns_in_constraint
+                })
+                logger.info(f"Prepared unique index: {index_name} on columns {normal_columns_in_constraint}")
+
+            # Process regular (non-unique) INDEXES
+            for index in indexes:
+                index_name = index.get('name', '')
+                index_columns = index.get('column_names', [])
+                is_unique = index.get('unique', False)
+                
+                # Skip primary key indexes (they're already handled)
+                if pk_constraint and set(index_columns) == set(pk_constraint.get('constrained_columns', [])):
+                    continue
+                
+                # Skip if this is a unique index (already handled by unique constraints)
+                if is_unique:
+                    continue
+                
+                # Filter out encrypted columns from the index
+                normal_columns_in_index = [col for col in index_columns if col not in encrypted_columns]
+                
+                # Skip if no normal columns remain
+                if not normal_columns_in_index:
+                    logger.warning(
+                        f"Skipping index '{index_name}' on table '{table_name}' "
+                        f"because all columns are encrypted: {index_columns}"
+                    )
+                    continue
+                
+                # Create the regular index with proper column list
+                if not index_name or index_name.startswith('PRIMARY'):
+                    # Generate index name if not provided or if it's a primary key index
+                    if len(normal_columns_in_index) == 1:
+                        index_name = f"idx_{table_name}_{normal_columns_in_index[0]}"
+                    else:
+                        index_name = f"idx_{table_name}_{'_'.join(normal_columns_in_index)}"
+                
+                regular_index_sql = f"CREATE INDEX {index_name} ON {table_name}({', '.join(normal_columns_in_index)})"
+                indexes_to_create.append({
+                    'sql': regular_index_sql,
+                    'name': index_name,
+                    'type': 'regular',
+                    'columns': normal_columns_in_index
+                })
+                logger.info(f"Prepared regular index: {index_name} on columns {normal_columns_in_index}")
 
             # Drop table if it exists to ensure clean schema
             drop_sql = f"DROP TABLE IF EXISTS {table_name}"
@@ -2757,15 +2847,16 @@ def create_encrypted_schema():
             with encrypted_engine.begin() as conn:
                 conn.execute(text(create_sql))
 
-                # Create unique indexes for normal columns that had unique constraints
-                for unique_sql in unique_indexes:
+                # Create all indexes (both unique and regular)
+                for index_info in indexes_to_create:
                     try:
-                        conn.execute(text(unique_sql))
+                        conn.execute(text(index_info['sql']))
+                        logger.info(f"Created {index_info['type']} index: {index_info['name']}")
                     except Exception as e:
-                        logger.warning(f"Failed to create unique index: {e}")
+                        logger.warning(f"Failed to create {index_info['type']} index {index_info['name']}: {e}")
 
             logger.info(
-                f"Created encrypted schema for table: {table_name} with {len(primary_keys)} primary keys and {len(unique_indexes)} unique constraints")
+                f"Created encrypted schema for table: {table_name} with {len(primary_keys)} primary keys and {len(indexes_to_create)} indexes")
 
         source_engine.dispose()
         encrypted_engine.dispose()
