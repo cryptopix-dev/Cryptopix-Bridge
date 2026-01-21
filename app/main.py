@@ -2632,11 +2632,37 @@ def create_encrypted_schema():
 
     try:
         # Connect to source database to get column types and constraints
-        source_engine = create_engine(migration_state["source_db_url"])
+        source_connect_args = {}
+        if 'mysql' in migration_state["source_db_url"].lower():
+            source_connect_args = {
+                'connect_timeout': 28800,
+                'read_timeout': 28800,
+                'write_timeout': 28800,
+            }
+        
+        source_engine = create_engine(
+            migration_state["source_db_url"],
+            pool_pre_ping=True,
+            pool_recycle=3600,
+            connect_args=source_connect_args
+        )
         inspector = inspect(source_engine)
 
         # Connect to encrypted database
-        encrypted_engine = create_engine(migration_state["encrypted_db_url"])
+        encrypted_connect_args = {}
+        if 'mysql' in migration_state["encrypted_db_url"].lower():
+            encrypted_connect_args = {
+                'connect_timeout': 28800,
+                'read_timeout': 28800,
+                'write_timeout': 28800,
+            }
+        
+        encrypted_engine = create_engine(
+            migration_state["encrypted_db_url"],
+            pool_pre_ping=True,
+            pool_recycle=3600,
+            connect_args=encrypted_connect_args
+        )
 
         for table_name, config in migration_state["table_configs"].items():
             # Get source column information
@@ -2881,11 +2907,37 @@ def migrate_data_with_progress(migration_state):
         if not migration_state.get("table_configs"):
             return {"success": False, "error": "No table configurations found. Please configure columns before migration."}
 
-        # Connect to source database
-        source_engine = create_engine(migration_state["source_db_url"])
+        # Connect to source database with connection pooling and timeout settings
+        source_connect_args = {}
+        if 'mysql' in migration_state["source_db_url"].lower():
+            source_connect_args = {
+                'connect_timeout': 28800,  # 8 hours
+                'read_timeout': 28800,
+                'write_timeout': 28800,
+            }
+        
+        source_engine = create_engine(
+            migration_state["source_db_url"],
+            pool_pre_ping=True,  # Verify connections before using them
+            pool_recycle=3600,  # Recycle connections after 1 hour
+            connect_args=source_connect_args
+        )
 
-        # Connect to encrypted database
-        encrypted_engine = create_engine(migration_state["encrypted_db_url"])
+        # Connect to encrypted database with connection pooling and timeout settings
+        encrypted_connect_args = {}
+        if 'mysql' in migration_state["encrypted_db_url"].lower():
+            encrypted_connect_args = {
+                'connect_timeout': 28800,  # 8 hours
+                'read_timeout': 28800,
+                'write_timeout': 28800,
+            }
+        
+        encrypted_engine = create_engine(
+            migration_state["encrypted_db_url"],
+            pool_pre_ping=True,  # Verify connections before using them
+            pool_recycle=3600,  # Recycle connections after 1 hour
+            connect_args=encrypted_connect_args
+        )
 
         total_migrated = 0
         total_tables = len(migration_state["table_configs"])
@@ -2924,7 +2976,7 @@ def migrate_data_with_progress(migration_state):
                     'INFO', f'Found {len(rows)} rows in {table_name}', source='migration')
 
                 # Process rows in batches for bulk encryption
-                batch_size = 100  # Process 100 rows at a time
+                batch_size = 50  # Reduced from 100 to prevent timeout issues
                 total_rows = len(rows)
 
                 for i in range(0, total_rows, batch_size):
@@ -2998,10 +3050,47 @@ def migrate_data_with_progress(migration_state):
                             [f':{col}' for col in all_columns])
                         insert_sql = f"INSERT INTO {table_name} ({', '.join(all_columns)}) VALUES ({placeholders})"
 
-                        # Insert each row individually for BLOB compatibility
-                        with encrypted_engine.begin() as enc_conn:
-                            for row_data in encrypted_batch:
-                                enc_conn.execute(text(insert_sql), row_data)
+                        # Insert each row individually for BLOB compatibility with connection health check
+                        try:
+                            with encrypted_engine.begin() as enc_conn:
+                                # Set MySQL session variables to prevent timeout issues
+                                # Note: max_allowed_packet is read-only at session level, must be set globally
+                                if 'mysql' in migration_state["encrypted_db_url"].lower():
+                                    enc_conn.execute(text("SET SESSION wait_timeout=28800"))  # 8 hours
+                                    enc_conn.execute(text("SET SESSION interactive_timeout=28800"))  # 8 hours
+                                    enc_conn.execute(text("SET SESSION net_read_timeout=28800"))  # 8 hours
+                                    enc_conn.execute(text("SET SESSION net_write_timeout=28800"))  # 8 hours
+                                
+                                # Ping the connection to ensure it's alive
+                                enc_conn.execute(text("SELECT 1"))
+                                
+                                for row_data in encrypted_batch:
+                                    enc_conn.execute(text(insert_sql), row_data)
+                        except Exception as batch_error:
+                            # If batch fails, try to reconnect and retry once
+                            log_system_event(
+                                'WARNING', f'Batch insert failed for {table_name}, attempting reconnect: {str(batch_error)}', source='migration')
+                            
+                            # Dispose and recreate the engine
+                            encrypted_engine.dispose()
+                            encrypted_engine = create_engine(
+                                migration_state["encrypted_db_url"],
+                                pool_pre_ping=True,
+                                pool_recycle=3600,
+                                connect_args=encrypted_connect_args
+                            )
+                            
+                            # Retry the batch
+                            with encrypted_engine.begin() as enc_conn:
+                                # Set MySQL session variables again after reconnection
+                                if 'mysql' in migration_state["encrypted_db_url"].lower():
+                                    enc_conn.execute(text("SET SESSION wait_timeout=28800"))  # 8 hours
+                                    enc_conn.execute(text("SET SESSION interactive_timeout=28800"))  # 8 hours
+                                    enc_conn.execute(text("SET SESSION net_read_timeout=28800"))  # 8 hours
+                                    enc_conn.execute(text("SET SESSION net_write_timeout=28800"))  # 8 hours
+                                
+                                for row_data in encrypted_batch:
+                                    enc_conn.execute(text(insert_sql), row_data)
 
                 total_migrated += total_rows
                 log_system_event(
@@ -3051,11 +3140,37 @@ def migrate_data():
         if not migration_state.get("table_configs"):
             return {"success": False, "error": "No table configurations found. Please configure columns before migration."}
 
-        # Connect to source database
-        source_engine = create_engine(migration_state["source_db_url"])
+        # Connect to source database with connection pooling and timeout settings
+        source_connect_args = {}
+        if 'mysql' in migration_state["source_db_url"].lower():
+            source_connect_args = {
+                'connect_timeout': 28800,  # 8 hours
+                'read_timeout': 28800,
+                'write_timeout': 28800,
+            }
+        
+        source_engine = create_engine(
+            migration_state["source_db_url"],
+            pool_pre_ping=True,  # Verify connections before using them
+            pool_recycle=3600,  # Recycle connections after 1 hour
+            connect_args=source_connect_args
+        )
 
-        # Connect to encrypted database
-        encrypted_engine = create_engine(migration_state["encrypted_db_url"])
+        # Connect to encrypted database with connection pooling and timeout settings
+        encrypted_connect_args = {}
+        if 'mysql' in migration_state["encrypted_db_url"].lower():
+            encrypted_connect_args = {
+                'connect_timeout': 28800,  # 8 hours
+                'read_timeout': 28800,
+                'write_timeout': 28800,
+            }
+        
+        encrypted_engine = create_engine(
+            migration_state["encrypted_db_url"],
+            pool_pre_ping=True,  # Verify connections before using them
+            pool_recycle=3600,  # Recycle connections after 1 hour
+            connect_args=encrypted_connect_args
+        )
 
         total_migrated = 0
         total_tables = len(migration_state["table_configs"])
@@ -3089,7 +3204,7 @@ def migrate_data():
                     'INFO', f'Found {len(rows)} rows in {table_name}', source='migration')
 
                 # Process rows in batches for bulk encryption
-                batch_size = 100  # Process 100 rows at a time
+                batch_size = 50  # Reduced from 100 to prevent timeout issues
 
                 for i in range(0, len(rows), batch_size):
                     batch_rows = rows[i:i + batch_size]
@@ -3160,10 +3275,47 @@ def migrate_data():
                             [f':{col}' for col in all_columns])
                         insert_sql = f"INSERT INTO {table_name} ({', '.join(all_columns)}) VALUES ({placeholders})"
 
-                        # Insert each row individually for BLOB compatibility
-                        with encrypted_engine.begin() as enc_conn:
-                            for row_data in encrypted_batch:
-                                enc_conn.execute(text(insert_sql), row_data)
+                        # Insert each row individually for BLOB compatibility with connection health check
+                        try:
+                            with encrypted_engine.begin() as enc_conn:
+                                # Set MySQL session variables to prevent timeout issues
+                                # Note: max_allowed_packet is read-only at session level, must be set globally
+                                if 'mysql' in migration_state["encrypted_db_url"].lower():
+                                    enc_conn.execute(text("SET SESSION wait_timeout=28800"))  # 8 hours
+                                    enc_conn.execute(text("SET SESSION interactive_timeout=28800"))  # 8 hours
+                                    enc_conn.execute(text("SET SESSION net_read_timeout=28800"))  # 8 hours
+                                    enc_conn.execute(text("SET SESSION net_write_timeout=28800"))  # 8 hours
+                                
+                                # Ping the connection to ensure it's alive
+                                enc_conn.execute(text("SELECT 1"))
+                                
+                                for row_data in encrypted_batch:
+                                    enc_conn.execute(text(insert_sql), row_data)
+                        except Exception as batch_error:
+                            # If batch fails, try to reconnect and retry once
+                            log_system_event(
+                                'WARNING', f'Batch insert failed for {table_name}, attempting reconnect: {str(batch_error)}', source='migration')
+                            
+                            # Dispose and recreate the engine
+                            encrypted_engine.dispose()
+                            encrypted_engine = create_engine(
+                                add_mysql_max_packet_to_url(migration_state["encrypted_db_url"]),
+                                pool_pre_ping=True,
+                                pool_recycle=3600,
+                                connect_args=encrypted_connect_args
+                            )
+                            
+                            # Retry the batch
+                            with encrypted_engine.begin() as enc_conn:
+                                # Set MySQL session variables again after reconnection
+                                if 'mysql' in migration_state["encrypted_db_url"].lower():
+                                    enc_conn.execute(text("SET SESSION wait_timeout=28800"))  # 8 hours
+                                    enc_conn.execute(text("SET SESSION interactive_timeout=28800"))  # 8 hours
+                                    enc_conn.execute(text("SET SESSION net_read_timeout=28800"))  # 8 hours
+                                    enc_conn.execute(text("SET SESSION net_write_timeout=28800"))  # 8 hours
+                                
+                                for row_data in encrypted_batch:
+                                    enc_conn.execute(text(insert_sql), row_data)
 
                 total_migrated += len(rows)
                 log_system_event(
@@ -5325,6 +5477,128 @@ def execute_console_command():
         log_system_event('ERROR', f'Console execution error: {str(e)}', source='query_console', user_id=session.get(
             'user_email', 'anonymous'))
         return {"success": False, "error": f"Execution failed: {str(e)}"}, 500
+
+
+@app.route('/api/console/parse_create_table', methods=['POST'])
+@login_required
+def parse_create_table():
+    """Parse CREATE TABLE statement and return column information"""
+    try:
+        from app.services.table_creation_service import table_creation_service
+        
+        data = request.get_json()
+        sql = data.get('sql', '').strip()
+        
+        if not sql:
+            return {"success": False, "error": "No SQL provided"}, 400
+        
+        # Parse the CREATE TABLE statement
+        parsed = table_creation_service.parse_create_table_statement(sql)
+        
+        return {
+            "success": True,
+            "table_info": parsed
+        }
+        
+    except Exception as e:
+        logger.error(f"Error parsing CREATE TABLE: {e}")
+        return {"success": False, "error": str(e)}, 400
+
+
+@app.route('/api/console/create_encrypted_table', methods=['POST'])
+@login_required
+def create_encrypted_table():
+    """Create table with encryption configuration"""
+    try:
+        from app.services.table_creation_service import table_creation_service
+        
+        data = request.get_json()
+        original_sql = data.get('original_sql', '').strip()
+        table_config = data.get('table_config', {})
+        db_id = data.get('db_id')
+        
+        if not original_sql or not table_config:
+            return {"success": False, "error": "Missing required parameters"}, 400
+        
+        if not db_id:
+            return {"success": False, "error": "Database ID is required"}, 400
+        
+        # Get database URLs from registry
+        from app.services.database_registry import database_registry
+        db_info = database_registry.get_database(db_id)
+        
+        if not db_info:
+            return {"success": False, "error": f"Database {db_id} not found"}, 404
+        
+        source_db_url = db_info.get('source_db_url')
+        encrypted_db_url = db_info.get('encrypted_db_url')
+        
+        if not source_db_url or not encrypted_db_url:
+            return {"success": False, "error": "Database URLs not configured"}, 400
+        
+        # Create the encrypted table
+        result = table_creation_service.create_encrypted_table(
+            original_sql=original_sql,
+            table_config=table_config,
+            source_db_url=source_db_url,
+            encrypted_db_url=encrypted_db_url,
+            db_id=db_id
+        )
+        
+        # Log the operation
+        if result.get('success'):
+            log_system_event(
+                'INFO',
+                f"Created encrypted table: {table_config.get('table_name')}",
+                source='table_creation',
+                user_id=session.get('user_email')
+            )
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error creating encrypted table: {e}")
+        log_system_event(
+            'ERROR',
+            f"Table creation failed: {str(e)}",
+            source='table_creation',
+            user_id=session.get('user_email')
+        )
+        return {"success": False, "error": str(e)}, 500
+
+
+
+@app.route('/api/console/tables', methods=['GET'])
+@login_required
+def get_database_tables():
+    """Get list of tables for a specific database"""
+    try:
+        db_id = request.args.get('db_id')
+        if not db_id:
+             return {"success": False, "error": "Database ID is required"}, 400
+
+        from app.services.database_registry import database_registry
+        from sqlalchemy import create_engine, inspect
+
+        db_info = database_registry.get_database(db_id)
+        if not db_info:
+            return {"success": False, "error": f"Database {db_id} not found"}, 404
+
+        source_db_url = db_info.get('source_db_url')
+        if not source_db_url:
+            return {"success": False, "error": "Database URL not configured"}, 400
+
+        engine = create_engine(source_db_url)
+        try:
+            inspector = inspect(engine)
+            tables = inspector.get_table_names()
+            return {"success": True, "tables": tables}
+        finally:
+            engine.dispose()
+
+    except Exception as e:
+        logger.error(f"Error listing tables: {e}")
+        return {"success": False, "error": str(e)}, 500
 
 
 @app.route('/api/console/suggestions', methods=['POST'])
