@@ -10,7 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="/static/styles.css">
-    
+
 </head>
 
 <body>
@@ -182,7 +182,8 @@
                     <div class="card mb-4 border shadow-sm">
                         <div class="card-header bg-light d-flex justify-content-between align-items-center">
                             <div>
-                                <h6 class="mb-0 text-primary fw-bold"><i class="bi bi-database-lock me-2"></i>Encrypted Database Url:{{
+                                <h6 class="mb-0 text-primary fw-bold"><i class="bi bi-database-lock me-2"></i>Encrypted
+                                    Database Url:{{
                                     db.encrypted_db_url }}</h6>
                                 <small class="text-muted">Database Name: {{ db.name }} </small>
                             </div>
@@ -400,7 +401,7 @@
                                             </td>
                                             <td>
                                                 <select class="form-select form-select-sm encryption-select"
-                                                    name="column_{{ table.name }}_{{ column.name }}_config"
+                                                    name="config:::{{ table.name }}:::{{ column.name }}"
                                                     data-current-status="{{ column.current_status }}"
                                                     onchange="highlightChange(this, '{{ column.current_status }}')">
                                                     <option value="normal" {{ 'selected' if
@@ -412,7 +413,8 @@
                                                         🔐 Encrypted (CLWE)
                                                     </option>
                                                 </select>
-                                                <input type="hidden" name="datatype_{{ table.name }}_{{ column.name }}"
+                                                <input type="hidden"
+                                                    name="datatype:::{{ table.name }}:::{{ column.name }}"
                                                     value="{{ column.type }}">
                                             </td>
                                         </tr>
@@ -518,7 +520,7 @@
                                 {% for db in databases %}
                                 <option value="{{ db.id }}" {{ 'selected' if request.args.get('db_id')==db.id else ''
                                     }}>
-                                     {{ db.name }}<!-- ({{ db.encrypted_db_url }}) -->
+                                    {{ db.name }}<!-- ({{ db.encrypted_db_url }}) -->
                                 </option>
                                 {% endfor %}
                             </select>
@@ -721,7 +723,18 @@
             selects.forEach(select => {
                 const currentStatus = select.getAttribute('data-current-status');
                 const newValue = select.value;
-                const columnName = select.name.replace('column_', '').replace('_config', '');
+                let columnName = select.name;
+
+                // Parse new format: config:::tablename:::columnname
+                if (columnName.startsWith('config:::')) {
+                    const parts = columnName.split(':::');
+                    if (parts.length >= 3) {
+                        columnName = parts[2];
+                    }
+                } else {
+                    // Fallback to old format
+                    columnName = columnName.replace('column_', '').replace('_config', '');
+                }
 
                 if (currentStatus && currentStatus !== newValue) {
                     changesCount++;
