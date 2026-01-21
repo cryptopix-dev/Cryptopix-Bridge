@@ -790,7 +790,7 @@ class VDSInstance:
             logger.info(f"Connection {connection_id}: Authenticating user '{username}' (OTP: {'provided' if otp_code else 'not provided'})")
             
             # Check VDS mode - client app handles OTP verification
-            from app.config.vds_mode import vds_mode
+            from app.vds_mode import vds_mode
             
             if vds_mode.is_passthrough_mode():
                 # PASSTHROUGH MODE: Client app handles OTP verification

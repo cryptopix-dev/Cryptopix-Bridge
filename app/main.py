@@ -604,10 +604,13 @@ def send_metrics():
             )
             
             if response.status_code == 200:
-                logger.info("Metrics sent successfully to license server")
+                logger.debug("Metrics sent successfully to license server")
+            elif response.status_code == 404:
+                # Endpoint not available - this is expected for some server versions
+                logger.debug(f"Metrics endpoint not available at {target_url} (404)")
             else:
                 resp_preview = response.text[:200] + "..." if len(response.text) > 200 else response.text
-                logger.warning(f"Failed to send metrics to {target_url}: {response.status_code} - {resp_preview}")
+                logger.debug(f"Failed to send metrics to {target_url}: {response.status_code} - {resp_preview}")
                 
         except Exception as e:
             logger.error(f"Error sending metrics request to {target_url}: {e}")
@@ -620,7 +623,7 @@ def start_system_monitor():
     """Background thread to monitor critical system conditions and send metrics"""
     def monitor_application():
         last_metrics_time = 0
-        METRICS_INTERVAL = 10  # Send metrics every 10 seconds for real-time updates
+        METRICS_INTERVAL = 60  # Send metrics every 60 seconds
 
         while True:
             try:
@@ -4542,7 +4545,13 @@ def perform_demigration(target_db_url: str, db_id: str = None):
                             column_mapping[col_name] = col_name
                         else:
                             # Normal column - keep as-is
-                            regular_columns.append(f"{col_name} {col['type']}")
+                            # Handle TIMESTAMP columns specially for MySQL strict mode
+                            col_type_str = str(col['type'])
+                            if 'TIMESTAMP' in col_type_str.upper():
+                                # Add NULL DEFAULT NULL for TIMESTAMP columns to avoid MySQL strict mode errors
+                                regular_columns.append(f"{col_name} {col_type_str} NULL DEFAULT NULL")
+                            else:
+                                regular_columns.append(f"{col_name} {col_type_str}")
                             column_mapping[col_name] = col_name
 
                 # Create regular table
