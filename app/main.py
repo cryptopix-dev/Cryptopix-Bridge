@@ -5584,11 +5584,13 @@ def get_database_tables():
         if not db_info:
             return {"success": False, "error": f"Database {db_id} not found"}, 404
 
-        source_db_url = db_info.get('source_db_url')
-        if not source_db_url:
+        # Prefer encrypted database if available to show current state of managed data
+        target_db_url = db_info.get('encrypted_db_url') or db_info.get('source_db_url')
+        
+        if not target_db_url:
             return {"success": False, "error": "Database URL not configured"}, 400
 
-        engine = create_engine(source_db_url)
+        engine = create_engine(target_db_url)
         try:
             inspector = inspect(engine)
             tables = inspector.get_table_names()

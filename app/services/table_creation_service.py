@@ -9,6 +9,8 @@ from typing import Dict, Any, List, Tuple, Optional
 from sqlalchemy import create_engine, text, inspect
 from app.core.encryption import clwe_encryptor
 from app.services.sql_translator import sql_translator
+import os
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -299,8 +301,8 @@ class TableCreationService:
             col_name = col['name']
             
             if col_name in encrypted_columns:
-                # Encrypted column: convert to TEXT
-                new_columns.append(f"`{col_name}` TEXT")
+                # Encrypted column: convert to LONGBLOB for binary storage
+                new_columns.append(f"`{col_name}` LONGBLOB")
                 # Add tag column
                 new_columns.append(f"`tag_{col_name}` VARCHAR(255)")
             else:
@@ -401,12 +403,16 @@ class TableCreationService:
     def _update_encrypted_schema_file(self, schema_folder: str, table_name: str, table_config: Dict[str, Any], encrypted_columns: List[str]):
         """Update encrypted_schema.json"""
         file_path = os.path.join(schema_folder, 'encrypted_schema.json')
-        if not os.path.exists(file_path):
-            return
-
+        
         try:
-            with open(file_path, 'r') as f:
-                data = json.load(f)
+            if os.path.exists(file_path):
+                with open(file_path, 'r') as f:
+                    try:
+                        data = json.load(f)
+                    except json.JSONDecodeError:
+                        data = {}
+            else:
+                data = {}
 
             # Build encrypted schema columns
             columns = []
@@ -415,10 +421,10 @@ class TableCreationService:
                 is_encrypted = col_name in encrypted_columns
                 
                 if is_encrypted:
-                    # Encrypted column becomes TEXT
+                    # Encrypted column becomes LONGBLOB
                     columns.append({
                         "name": col_name,
-                        "type": "TEXT",
+                        "type": "LONGBLOB",
                         "nullable": col['nullable'],
                         "default": None, # Encrypted usually removes default
                         "primary_key": False

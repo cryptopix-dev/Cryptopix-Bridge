@@ -15,10 +15,14 @@
         :root {
             --pma-sidebar-bg: #f3f3f3;
             --pma-sidebar-border: #dcdcdc;
-            --pma-primary: #235a81;
-            /* Classic phpMyAdmin blue */
+            --pma-primary: #2544e3;
+            /* Updated Blue */
             --pma-hover: #eef5fb;
             --pma-border: #dee2e6;
+        }
+
+        .text-custom {
+            color: #2544e3 !important;
         }
 
         body {
@@ -34,8 +38,8 @@
             height: 50px;
             padding: 0 1rem;
             background: #fff;
-            border-bottom: 3px solid #ff9800;
-            /* XAMPP Orange accent */
+            border-bottom: 3px solid #2544e3;
+            /* Blue accent */
         }
 
         .header h1 {
@@ -317,15 +321,15 @@
             <div class="brand d-flex align-items-center">
                 <img src="https://www.phpmyadmin.net/static/images/logo.png"
                     style="height: 30px; opacity: 0; display:none;" alt="logo mock">
-                <i class="bi bi-database-fill-gear text-warning me-2 fs-5"></i>
+                <i class="bi bi-database-fill-gear text-custom me-2 fs-5"></i>
                 <h1 class="fs-6 fw-bold text-dark">Cryptopix <span class="fw-normal text-muted">/ phpMyAdmin
                         Style</span></h1>
             </div>
             <div class="nav-links d-flex gap-3">
                 <a href="{{ url_for('index') }}" class="text-secondary text-decoration-none"><i
                         class="bi bi-house me-1"></i>Home</a>
-                <a href="{{ url_for('logout') }}" class="text-secondary text-decoration-none"><i
-                        class="bi bi-box-arrow-right me-1"></i>Exit</a>
+                <a href="{{ url_for('index') }}" class="text-secondary text-decoration-none"><i
+                        class="bi bi-speedometer2 me-1"></i>Dashboard</a>
             </div>
         </div>
     </header>
@@ -347,7 +351,7 @@
                     <div class="db-row" onclick="toggleDb('{{ db.id }}', '{{ db.name }}')">
                         <span class="expand-icon" id="icon-{{ db.id }}"><i
                                 class="bi bi-caret-right-fill text-secondary"></i></span>
-                        <i class="bi bi-database text-warning"></i>
+                        <i class="bi bi-database text-custom"></i>
                         <span>{{ db.name }}</span>
                     </div>
                     <div class="table-group" id="group-{{ db.id }}" data-loaded="false">
@@ -379,7 +383,7 @@
                     <i class="bi bi-table text-success"></i> Browse
                 </div>
                 <div class="pma-tab" id="tab-structure" onclick="switchTab('structure')">
-                    <i class="bi bi-list-columns text-warning"></i> Structure
+                    <i class="bi bi-list-columns text-custom"></i> Structure
                 </div>
                 <div class="pma-tab active" id="tab-sql" onclick="switchTab('sql')">
                     <i class="bi bi-terminal text-secondary"></i> SQL
@@ -433,266 +437,661 @@
                     <div id="browse-results"></div>
                 </div>
 
+                <!-- Structure View -->
+                <div id="view-structure" style="display: none;">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h6 class="mb-0">Structure of table <span class="current-table-name fw-bold">...</span></h6>
+                        <button class="btn-pma px-2" onclick="runStructureQuery()"><i class="bi bi-arrow-clockwise"></i>
+                            Refresh</button>
+                    </div>
+                    <div id="structure-results"></div>
+                </div>
+
+                <!-- Search View -->
+                <div id="view-search" style="display: none;">
+                    <div class="card shadow-sm border-0">
+                        <div class="card-body bg-light">
+                            <h6 class="card-title text-secondary mb-3"><i class="bi bi-search"></i> Search in table
+                                <span class="current-table-name fw-bold text-dark">...</span>
+                            </h6>
+                            <div class="row g-2 align-items-center">
+                                <div class="col-md-4">
+                                    <label class="small text-muted">Column</label>
+                                    <select class="form-select form-select-sm" id="search-col">
+                                        <option>Select table first...</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="small text-muted">Operator</label>
+                                    <select class="form-select form-select-sm" id="search-op">
+                                        <option value="=">=</option>
+                                        <option value="LIKE">LIKE %...%</option>
+                                        <option value=">">&gt;</option>
+                                        <option value="<">&lt;</option>
+                                        <option value=">=">&gt;=</option>
+                                        <option value="<=">&lt;=</option>
+                                        <option value="!=">!=</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-5">
+                                    <label class="small text-muted">Value</label>
+                                    <div class="input-group input-group-sm">
+                                        <input type="text" class="form-control" id="search-val" placeholder="Value...">
+                                        <button class="btn btn-primary" id="btn-search"
+                                            onclick="runSearch()">Search</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="search-results" class="mt-3"></div>
+                </div>
             </div>
         </div>
-    </div>
 
-    <!-- Encryption Modal (Hidden, kept for potential future use or compliance) -->
-    <!-- ... (Optimized out for this UI request to keep it clean, can be re-added if migration features needed) ... -->
+        <!-- Encryption Modal (Hidden, kept for potential future use or compliance) -->
+        <!-- ... (Optimized out for this UI request to keep it clean, can be re-added if migration features needed) ... -->
 
-    <!-- Bootstrap JS -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+        <!-- Bootstrap JS -->
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
-    <script>
-        // State
-        let currentDbId = null;
-        let currentDbName = null;
-        let currentTable = null;
-        let activeTab = 'sql';
+        <script>
+            // State
+            let currentDbId = null;
+            let currentDbName = null;
+            let currentTable = null;
+            let activeTab = 'sql';
 
-        // --- Sidebar Logic ---
-        function toggleDb(dbId, dbName) {
-            const group = document.getElementById(`group-${dbId}`);
-            const icon = document.getElementById(`icon-${dbId}`);
+            // --- Sidebar Logic ---
+            function toggleDb(dbId, dbName) {
+                const group = document.getElementById(`group-${dbId}`);
+                const icon = document.getElementById(`icon-${dbId}`);
 
-            // Set current context
-            currentDbId = dbId;
-            currentDbName = dbName;
-            updateBreadcrumbs();
+                // Set current context
+                currentDbId = dbId;
+                currentDbName = dbName;
+                updateBreadcrumbs();
 
-            // Toggle visibility
-            const isHidden = group.style.display !== 'block';
+                // Toggle visibility
+                const isHidden = group.style.display !== 'block';
 
-            if (isHidden) {
-                group.style.display = 'block';
-                icon.innerHTML = '<i class="bi bi-caret-down-fill text-secondary"></i>';
+                if (isHidden) {
+                    group.style.display = 'block';
+                    icon.innerHTML = '<i class="bi bi-caret-down-fill text-secondary"></i>';
 
-                // Load tables if not loaded
-                if (group.dataset.loaded === "false") {
-                    fetchTables(dbId);
+                    // Load tables if not loaded
+                    if (group.dataset.loaded === "false") {
+                        fetchTables(dbId);
+                    }
+                } else {
+                    group.style.display = 'none';
+                    icon.innerHTML = '<i class="bi bi-caret-right-fill text-secondary"></i>';
                 }
-            } else {
-                group.style.display = 'none';
-                icon.innerHTML = '<i class="bi bi-caret-right-fill text-secondary"></i>';
+
+                // Show SQL tab by default for DB interaction
+                if (!currentTable) {
+                    switchTab('sql');
+                    document.getElementById('main-tabs').style.visibility = 'visible';
+                    document.querySelector('.current-db-name').textContent = dbName;
+                }
             }
 
-            // Show SQL tab by default for DB interaction
-            if (!currentTable) {
-                switchTab('sql');
-                document.getElementById('main-tabs').style.visibility = 'visible';
-                document.querySelector('.current-db-name').textContent = dbName;
-            }
-        }
+            function fetchTables(dbId) {
+                const group = document.getElementById(`group-${dbId}`);
+                fetch(`/api/console/tables?db_id=${dbId}`)
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success) {
+                            group.dataset.loaded = "true";
+                            if (data.tables.length === 0) {
+                                group.innerHTML = '<div class="ps-4 text-muted small">No tables</div>';
+                                return;
+                            }
 
-        function fetchTables(dbId) {
-            const group = document.getElementById(`group-${dbId}`);
-            fetch(`/api/console/tables?db_id=${dbId}`)
-                .then(r => r.json())
-                .then(data => {
-                    if (data.success) {
-                        group.dataset.loaded = "true";
-                        if (data.tables.length === 0) {
-                            group.innerHTML = '<div class="ps-4 text-muted small">No tables</div>';
-                            return;
-                        }
-
-                        let html = '';
-                        data.tables.forEach(t => {
+                            let html = '';
                             html += `
+                                <div class="table-row text-success fw-bold" onclick="openCreateTableModal('${dbId}')">
+                                    <i class="bi bi-plus-circle"></i> Create Encrypted Table
+                                </div>
+                            `;
+                            data.tables.forEach(t => {
+                                html += `
                                 <div class="table-row" onclick="selectTable('${t}', event)">
                                     <i class="bi bi-table"></i> ${t}
                                 </div>
                             `;
-                        });
-                        group.innerHTML = html;
-                    } else {
-                        group.innerHTML = '<div class="text-danger ps-4">Error loading</div>';
+                            });
+                            group.innerHTML = html;
+                        } else {
+                            group.innerHTML = '<div class="text-danger ps-4">Error loading</div>';
+                        }
+                    })
+                    .catch(e => {
+                        group.innerHTML = '<div class="text-danger ps-4">Network error</div>';
+                    });
+            }
+
+            function selectTable(table, event) {
+                event.stopPropagation(); // Prevent DB toggle
+                currentTable = table;
+
+                // Highlight
+                document.querySelectorAll('.table-row').forEach(r => r.classList.remove('active'));
+                event.currentTarget.classList.add('active');
+
+                // Update UI
+                updateBreadcrumbs();
+                document.querySelectorAll('.current-table-name').forEach(el => el.textContent = table);
+
+                // Switch to Browse by default for tables
+                switchTab('browse');
+            }
+
+            function runQuery() {
+                const sql = document.getElementById('sql-input').value;
+                if (!sql) return;
+
+                // Intercept Create Table
+                if (sql.trim().toUpperCase().startsWith('CREATE TABLE')) {
+                    if (currentDbId) {
+                        openCreateTableModal(currentDbId);
+                        document.getElementById('create-table-sql').value = sql;
+                        document.getElementById('sql-results').innerHTML = '<div class="alert alert-info"><i class="bi bi-magic"></i> Detected Table Creation. Opening Encryption Wizard...</div>';
+                        return;
                     }
-                })
-                .catch(e => {
-                    group.innerHTML = '<div class="text-danger ps-4">Network error</div>';
-                });
-        }
-
-        function selectTable(table, event) {
-            event.stopPropagation(); // Prevent DB toggle
-            currentTable = table;
-
-            // Highlight
-            document.querySelectorAll('.table-row').forEach(r => r.classList.remove('active'));
-            event.currentTarget.classList.add('active');
-
-            // Update UI
-            updateBreadcrumbs();
-            document.querySelectorAll('.current-table-name').forEach(el => el.textContent = table);
-
-            // Switch to Browse by default for tables
-            switchTab('browse');
-        }
-
-        function updateBreadcrumbs() {
-            const dbEl = document.getElementById('bread-db');
-            const sepEl = document.getElementById('sep-table');
-            const tblEl = document.getElementById('bread-table');
-
-            if (currentDbName) {
-                dbEl.textContent = currentDbName;
-                dbEl.style.fontWeight = 'bold';
-            }
-
-            if (currentTable) {
-                sepEl.style.display = 'block';
-                tblEl.style.display = 'block';
-                tblEl.textContent = currentTable;
-            } else {
-                sepEl.style.display = 'none';
-                tblEl.style.display = 'none';
-            }
-        }
-
-        // --- Tabs Logic ---
-        function switchTab(tab) {
-            activeTab = tab;
-
-            // Update Tab UI
-            document.querySelectorAll('.pma-tab').forEach(t => t.classList.remove('active'));
-            const activeEl = document.getElementById(`tab-${tab}`);
-            if (activeEl) activeEl.classList.add('active');
-
-            // Hide all views
-            document.getElementById('view-home').style.display = 'none';
-            document.getElementById('view-sql').style.display = 'none';
-            document.getElementById('view-browse').style.display = 'none';
-
-            // Handle Tab Actions
-            if (tab === 'sql') {
-                document.getElementById('view-sql').style.display = 'block';
-                document.getElementById('sql-input').focus();
-            } else if (tab === 'browse') {
-                document.getElementById('view-browse').style.display = 'block';
-                if (currentTable && currentDbId) {
-                    runBrowseQuery();
                 }
-            } else if (tab === 'structure') {
-                // Reuse SQL view with structure query
-                switchTab('sql'); // Fallback visual
+
+                const btn = document.getElementById('btn-go');
+                btn.innerHTML = 'Executing...';
+                btn.disabled = true;
+
+                fetch('/api/console/execute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command: sql, db_id: currentDbId })
+                })
+                    .then(r => r.json())
+                    .then(data => {
+                        btn.innerHTML = 'Go';
+                        btn.disabled = false;
+                        renderResults(data, 'sql-results');
+
+                        // Auto-refresh logic
+                        if (data.success) {
+                            // Always refresh table list in case a table was created/dropped
+                            fetchTables(currentDbId);
+
+                            // If we are observing a table and made changes, refresh browse view
+                            // Actually, just always refresh browse if that tab is active?
+                            // Or maybe only if the query was INSERT/UPDATE/DELETE?
+                            // For simplicity, if 'Browse' tab is active, refresh it.
+                            // But wait, the user might want to see the SQL result first.
+                            // Better: If the user manually switches to Browse, it refreshes.
+                            // But if they are running a query, they are in SQL tab.
+
+                            // Specific check: if query was typically modifying data
+                            const upperSql = sql.trim().toUpperCase();
+                            if (upperSql.startsWith('INSERT') || upperSql.startsWith('UPDATE') || upperSql.startsWith('DELETE') || upperSql.startsWith('CREATE') || upperSql.startsWith('DROP')) {
+                                // Refresh browse view content silently so next visit is fresh
+                                if (currentTable) {
+                                    // We don't want to overwrite the SQL results we just showed.
+                                    // But we want 'Browse' tab to show new data when clicked.
+                                    // The 'switchTab' function already calls runBrowseQuery() if tab is 'browse'.
+                                    // So maybe just nothing needed here? 
+                                    // The user asked "refresht the database automaticvally after every query execution".
+                                    // This implies visual feedback.
+
+                                    // If query was CREATE TABLE, we definitely need sidebar refresh (done above).
+                                }
+                            }
+                        }
+                    })
+                    .catch(e => {
+                        btn.innerHTML = 'Go';
+                        btn.disabled = false;
+                        document.getElementById('sql-results').innerHTML = `<div class="alert alert-danger">${e.message}</div>`;
+                    });
+            }
+
+            function updateBreadcrumbs() {
+                const dbEl = document.getElementById('bread-db');
+                const sepEl = document.getElementById('sep-table');
+                const tblEl = document.getElementById('bread-table');
+
+                if (currentDbName) {
+                    // Make DB clickable to go back to DB root
+                    dbEl.innerHTML = `<a href="#" class="text-secondary text-decoration-none hover-primary" onclick="currentTable=null; updateBreadcrumbs(); switchTab('sql');">${currentDbName}</a>`;
+                    dbEl.style.fontWeight = 'bold';
+                } else {
+                    dbEl.textContent = 'Select Database';
+                }
+
                 if (currentTable) {
-                    document.getElementById('sql-input').value = `DESCRIBE \`${currentTable}\`;`; // Or SELECT * LIMIT 0
-                    runQuery(); // Auto run
+                    sepEl.style.display = 'block';
+                    tblEl.style.display = 'block';
+                    tblEl.textContent = currentTable;
+                } else {
+                    sepEl.style.display = 'none';
+                    tblEl.style.display = 'none';
                 }
             }
 
-            document.getElementById('main-tabs').style.visibility = 'visible';
-        }
+            // --- Tabs Logic ---
+            function switchTab(tab) {
+                activeTab = tab;
 
-        // --- Execution Logic ---
-        function runQuery() {
-            const sql = document.getElementById('sql-input').value;
-            if (!sql) return;
+                // Update Tab UI
+                document.querySelectorAll('.pma-tab').forEach(t => t.classList.remove('active'));
+                const activeEl = document.getElementById(`tab-${tab}`);
+                if (activeEl) activeEl.classList.add('active');
 
-            const btn = document.getElementById('btn-go');
-            btn.innerHTML = 'Executing...';
-            btn.disabled = true;
+                // Hide all views
+                document.getElementById('view-home').style.display = 'none';
+                document.getElementById('view-sql').style.display = 'none';
+                document.getElementById('view-browse').style.display = 'none';
+                const structureView = document.getElementById('view-structure');
+                if (structureView) structureView.style.display = 'none';
+                const searchView = document.getElementById('view-search');
+                if (searchView) searchView.style.display = 'none';
 
-            fetch('/api/console/execute', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ command: sql, db_id: currentDbId })
-            })
-                .then(r => r.json())
-                .then(data => {
-                    btn.innerHTML = 'Go';
-                    btn.disabled = false;
-                    renderResults(data, 'sql-results');
+                // Handle Tab Actions
+                if (tab === 'sql') {
+                    document.getElementById('view-sql').style.display = 'block';
+                    document.getElementById('sql-input').focus();
+                } else if (tab === 'browse') {
+                    document.getElementById('view-browse').style.display = 'block';
+                    if (currentTable && currentDbId) {
+                        runBrowseQuery();
+                    }
+                } else if (tab === 'structure') {
+                    const sView = document.getElementById('view-structure');
+                    if (sView) sView.style.display = 'block';
+
+                    if (currentTable && currentDbId) {
+                        runStructureQuery();
+                    } else {
+                        const res = document.getElementById('structure-results');
+                        if (res) res.innerHTML = '<div class="alert alert-warning">Please select a table to view structure.</div>';
+                    }
+                } else if (tab === 'search') {
+                    if (searchView) searchView.style.display = 'block';
+                    if (currentTable) {
+                        populateSearchColumns();
+                    } else {
+                        const res = document.getElementById('search-results');
+                        if (res) res.innerHTML = '<div class="alert alert-warning">Please select a table to search.</div>';
+                    }
+                }
+
+                document.getElementById('main-tabs').style.visibility = 'visible';
+            }
+
+            function runBrowseQuery() {
+                const container = document.getElementById('browse-results');
+                if (!container) return;
+                container.innerHTML = '<div class="text-muted p-3">Loading data...</div>';
+
+                const sql = `SELECT * FROM \`${currentTable}\` LIMIT 100`;
+
+                fetch('/api/console/execute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command: sql, db_id: currentDbId })
                 })
-                .catch(e => {
-                    btn.innerHTML = 'Go';
-                    btn.disabled = false;
-                    document.getElementById('sql-results').innerHTML = `<div class="alert alert-danger">${e.message}</div>`;
-                });
-        }
+                    .then(r => r.json())
+                    .then(data => {
+                        renderResults(data, 'browse-results');
+                    })
+                    .catch(e => {
+                        container.innerHTML = `<div class="alert alert-danger">${e.message}</div>`;
+                    });
+            }
 
-        function runBrowseQuery() {
-            const container = document.getElementById('browse-results');
-            container.innerHTML = '<div class="text-muted p-3">Loading data...</div>';
+            function runStructureQuery() {
+                const container = document.getElementById('structure-results');
+                if (!container) return;
+                container.innerHTML = '<div class="text-muted p-3">Loading structure...</div>';
 
-            const sql = `SELECT * FROM \`${currentTable}\` LIMIT 100`;
+                const sql = `DESCRIBE \`${currentTable}\``;
 
-            fetch('/api/console/execute', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ command: sql, db_id: currentDbId })
-            })
-                .then(r => r.json())
-                .then(data => {
-                    renderResults(data, 'browse-results');
+                fetch('/api/console/execute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command: sql, db_id: currentDbId })
                 })
-                .catch(e => {
-                    container.innerHTML = `<div class="alert alert-danger">${e.message}</div>`;
-                });
-        }
-
-        function refreshBrowse() {
-            runBrowseQuery();
-        }
-
-        function renderResults(data, containerId) {
-            const container = document.getElementById(containerId);
-
-            if (!data.success) {
-                container.innerHTML = `<div class="alert alert-warning border-warning"><i class="bi bi-exclamation-triangle"></i> ${data.error}</div>`;
-                return;
+                    .then(r => r.json())
+                    .then(data => {
+                        renderResults(data, 'structure-results');
+                    })
+                    .catch(e => {
+                        container.innerHTML = `<div class="alert alert-danger">${e.message}</div>`;
+                    });
             }
 
-            if (!data.rows) {
-                container.innerHTML = `<div class="alert alert-success border-success"><i class="bi bi-check-circle"></i> ${data.message || 'Success'}</div>`;
-                return;
+            function refreshBrowse() {
+                runBrowseQuery();
             }
 
-            if (data.rows.length === 0) {
-                container.innerHTML = `<div class="alert alert-info border-info"><i class="bi bi-info-circle"></i> MySQL returned an empty result set (i.e. zero rows).</div>`;
-                return;
-            }
+            function renderResults(data, containerId) {
+                const container = document.getElementById(containerId);
 
-            let html = `<div class="mb-2 p-2 bg-light border-start border-4 border-success small"><i class="bi bi-check"></i> Showing rows 0 - ${data.rows.length - 1} (${data.rows.length} total, Query took 0.00something sec)</div>`;
+                if (!data.success) {
+                    container.innerHTML = `<div class="alert alert-warning border-warning"><i class="bi bi-exclamation-triangle"></i> ${data.error}</div>`;
+                    return;
+                }
 
-            html += `<div class="pma-table-wrapper">`;
-            html += `<table class="pma-table">`;
-            html += `<thead><tr>`;
+                if (!data.rows) {
+                    container.innerHTML = `<div class="alert alert-success border-success"><i class="bi bi-check-circle"></i> ${data.message || 'Success'}</div>`;
+                    return;
+                }
 
-            // Actions head
-            html += `<th style="width: 80px;">Actions</th>`;
+                if (data.rows.length === 0) {
+                    container.innerHTML = `<div class="alert alert-info border-info"><i class="bi bi-info-circle"></i> MySQL returned an empty result set (i.e. zero rows).</div>`;
+                    return;
+                }
 
-            data.columns.forEach(c => {
-                html += `<th>${c}</th>`;
-            });
-            html += `</tr></thead><tbody>`;
+                let html = `<div class="mb-2 p-2 bg-light border-start border-4 border-success small"><i class="bi bi-check"></i> Showing rows 0 - ${data.rows.length - 1} (${data.rows.length} total, Query took 0.00something sec)</div>`;
 
-            data.rows.forEach(r => {
-                html += `<tr>`;
-                // Actions cell
-                html += `<td>
-                    <a href="#" class="action-link"><i class="bi bi-pencil-fill"></i></a>
-                    <a href="#" class="text-danger action-link"><i class="bi bi-trash-fill"></i></a>
-                </td>`;
+                html += `<div class="pma-table-wrapper">`;
+                html += `<table class="pma-table">`;
+                html += `<thead><tr>`;
+
+
 
                 data.columns.forEach(c => {
-                    let val = r[c];
-                    if (val === null) val = '<i class="text-muted">NULL</i>';
-                    html += `<td>${val}</td>`;
+                    html += `<th>${c}</th>`;
                 });
-                html += `</tr>`;
-            });
+                html += `</tr></thead><tbody>`;
 
-            html += `</tbody></table></div>`;
-            container.innerHTML = html;
-        }
+                data.rows.forEach(r => {
+                    html += `<tr>`;
 
-        function clearSql() {
-            document.getElementById('sql-input').value = '';
-            document.getElementById('sql-input').focus();
-        }
-    </script>
+                    data.columns.forEach(c => {
+                        let val = r[c];
+                        if (val === null) val = '<i class="text-muted">NULL</i>';
+                        html += `<td>${val}</td>`;
+                    });
+                    html += `</tr>`;
+                });
+
+                html += `</tbody></table></div>`;
+                container.innerHTML = html;
+            }
+
+            function clearSql() {
+                document.getElementById('sql-input').value = '';
+                document.getElementById('sql-input').focus();
+            }
+
+            // --- Search Logic ---
+            function populateSearchColumns() {
+                const sel = document.getElementById('search-col');
+                sel.innerHTML = '<option>Loading...</option>';
+
+                fetch('/api/console/execute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command: `DESCRIBE \`${currentTable}\``, db_id: currentDbId })
+                })
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success && data.rows) {
+                            let html = '';
+                            data.rows.forEach(row => {
+                                const colName = row['Field'] || row['COLUMN_NAME'] || Object.values(row)[0];
+                                html += `<option value="${colName}">${colName}</option>`;
+                            });
+                            sel.innerHTML = html;
+                        } else {
+                            sel.innerHTML = '<option>Error loading columns</option>';
+                        }
+                    })
+                    .catch(() => {
+                        sel.innerHTML = '<option>Error</option>';
+                    });
+            }
+
+            function runSearch() {
+                const col = document.getElementById('search-col').value;
+                const op = document.getElementById('search-op').value;
+                const val = document.getElementById('search-val').value;
+
+                let sql = '';
+                if (op === 'LIKE') {
+                    sql = `SELECT * FROM \`${currentTable}\` WHERE \`${col}\` LIKE '%${val}%'`;
+                } else {
+                    sql = `SELECT * FROM \`${currentTable}\` WHERE \`${col}\` ${op} '${val}'`;
+                }
+
+                const btn = document.getElementById('btn-search');
+                const originalText = btn.innerHTML;
+                btn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+                btn.disabled = true;
+
+                fetch('/api/console/execute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command: sql, db_id: currentDbId })
+                })
+                    .then(r => r.json())
+                    .then(data => {
+                        btn.innerHTML = originalText;
+                        btn.disabled = false;
+                        renderResults(data, 'search-results');
+                    })
+                    .catch(e => {
+                        btn.innerHTML = originalText;
+                        btn.disabled = false;
+                        document.getElementById('search-results').innerHTML = `<div class="alert alert-danger">${e.message}</div>`;
+                    });
+            }
+
+            // --- Create Table Logic ---
+            let createTableDbId = null;
+            let parsedTableConfig = null;
+
+            function openCreateTableModal(dbId) {
+                createTableDbId = dbId;
+                const modal = new bootstrap.Modal(document.getElementById('createTableModal'));
+                document.getElementById('create-table-sql').value = 'CREATE TABLE new_table (\n    id INT AUTO_INCREMENT PRIMARY KEY,\n    name VARCHAR(255),\n    email VARCHAR(255),\n    secret_data TEXT\n);';
+                document.getElementById('step-1').style.display = 'block';
+                document.getElementById('step-2').style.display = 'none';
+                document.getElementById('parse-error').style.display = 'none';
+                parsedTableConfig = null;
+                modal.show();
+            }
+
+            function parseSql() {
+                const sql = document.getElementById('create-table-sql').value;
+                if (!sql.trim()) return;
+
+                // Show loading state
+                const btn = document.getElementById('btn-parse');
+                const originalText = btn.innerHTML;
+                btn.innerHTML = 'Parsing...';
+                btn.disabled = true;
+
+                fetch('/api/console/parse_create_table', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sql: sql })
+                })
+                    .then(r => r.json())
+                    .then(data => {
+                        btn.innerHTML = originalText;
+                        btn.disabled = false;
+
+                        if (data.success) {
+                            parsedTableConfig = data.table_info;
+                            renderColumnConfig(data.table_info);
+                            document.getElementById('step-1').style.display = 'none';
+                            document.getElementById('step-2').style.display = 'block';
+                        } else {
+                            const errEl = document.getElementById('parse-error');
+                            errEl.textContent = data.error;
+                            errEl.style.display = 'block';
+                        }
+                    })
+                    .catch(e => {
+                        btn.innerHTML = originalText;
+                        btn.disabled = false;
+                        const errEl = document.getElementById('parse-error');
+                        errEl.textContent = 'Network error: ' + e.message;
+                        errEl.style.display = 'block';
+                    });
+            }
+
+            function renderColumnConfig(info) {
+                document.getElementById('new-table-name').textContent = info.table_name;
+                const tbody = document.getElementById('column-config-body');
+                tbody.innerHTML = '';
+
+                info.columns.forEach(col => {
+                    const tr = document.createElement('tr');
+
+                    // Determine if encryptable
+                    const isEncryptable = col.encryptable;
+                    const checked = false;
+
+                    tr.innerHTML = `
+                    <td>${col.name}</td>
+                    <td><span class="badge bg-light text-dark border">${col.data_type}${col.size ? '(' + col.size + ')' : ''}</span></td>
+                    <td class="text-center">
+                        ${isEncryptable ?
+                            `<div class="form-check d-flex justify-content-center">
+                                <input class="form-check-input encrypt-check" type="checkbox" value="${col.name}" id="enc-${col.name}">
+                            </div>` :
+                            `<span class="text-muted small">N/A</span>`
+                        }
+                    </td>
+                `;
+                    tbody.appendChild(tr);
+                });
+            }
+
+            function submitCreateTable() {
+                if (!createTableDbId || !parsedTableConfig) return;
+
+                // Gather encrypted columns
+                const encryptedColumns = [];
+                document.querySelectorAll('.encrypt-check:checked').forEach(cb => {
+                    encryptedColumns.push(cb.value);
+                });
+
+                // Update config
+                parsedTableConfig.encrypted_columns = encryptedColumns;
+
+                const btn = document.getElementById('btn-create-table');
+                const originalText = btn.innerHTML;
+                btn.innerHTML = 'Creating...';
+                btn.disabled = true;
+
+                fetch('/api/console/create_encrypted_table', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        original_sql: parsedTableConfig.original_sql,
+                        table_config: parsedTableConfig,
+                        db_id: createTableDbId
+                    })
+                })
+                    .then(r => r.json())
+                    .then(data => {
+                        btn.innerHTML = originalText;
+                        btn.disabled = false;
+
+                        if (data.success) {
+                            // Close modal
+                            const modalEl = document.getElementById('createTableModal');
+                            const modal = bootstrap.Modal.getInstance(modalEl);
+                            modal.hide();
+
+                            // Refresh table list
+                            fetchTables(createTableDbId);
+
+                            // Show success
+                            alert(`Table '${data.table_name}' created successfully with ${data.encrypted_columns.length} encrypted columns!`);
+                        } else {
+                            alert('Error: ' + data.error);
+                        }
+                    })
+                    .catch(e => {
+                        btn.innerHTML = originalText;
+                        btn.disabled = false;
+                        alert('Network error: ' + e.message);
+                    });
+            }
+        </script>
+
+        <!-- Create Table Modal -->
+        <div class="modal fade" id="createTableModal" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title"><i class="bi bi-shield-lock-fill text-primary"></i> Create Encrypted
+                            Table
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <!-- Step 1: SQL Input -->
+                        <div id="step-1">
+                            <div class="mb-3">
+                                <label class="form-label text-muted small fw-bold">PASTE 'CREATE TABLE' SQL
+                                    STATEMENT</label>
+                                <textarea id="create-table-sql" class="form-control font-monospace fs-6" rows="8"
+                                    placeholder="CREATE TABLE ..."></textarea>
+                                <div class="form-text">Paste a standard CREATE TABLE statement. We will parse it and let
+                                    you
+                                    choose which columns to encrypt.</div>
+                            </div>
+                            <div id="parse-error" class="alert alert-danger py-2 mt-2" style="display:none"></div>
+                            <div class="text-end">
+                                <button class="btn btn-primary" id="btn-parse" onclick="parseSql()">Next: Configure
+                                    Encryption <i class="bi bi-arrow-right"></i></button>
+                            </div>
+                        </div>
+
+                        <!-- Step 2: Column Config -->
+                        <div id="step-2" style="display:none">
+                            <div class="d-flex align-items-center mb-3">
+                                <button class="btn btn-sm btn-outline-secondary me-3"
+                                    onclick="document.getElementById('step-2').style.display='none';document.getElementById('step-1').style.display='block';"><i
+                                        class="bi bi-arrow-left"></i> Back</button>
+                                <h6 class="mb-0">Table: <span id="new-table-name" class="fw-bold text-primary"></span>
+                                </h6>
+                            </div>
+
+                            <div class="alert alert-info py-2 small">
+                                <i class="bi bi-info-circle-fill"></i> Select the columns you want to
+                                <strong>encrypt</strong>. Encrypted columns will be stored securely and can still be
+                                searched.
+                            </div>
+
+                            <div class="table-responsive border rounded">
+                                <table class="table table-sm table-hover mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>Column Name</th>
+                                            <th>Data Type</th>
+                                            <th class="text-center" style="width: 150px;">Encrypt?</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="column-config-body">
+                                        <!-- Injected here -->
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div class="text-end mt-4">
+                                <button class="btn btn-success" id="btn-create-table" onclick="submitCreateTable()"><i
+                                        class="bi bi-check-lg"></i> Create Table</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
 </body>
 
 </html>
