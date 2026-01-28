@@ -5,9 +5,6 @@ import os
 # Change this path if your application is located elsewhere
 project_home = '/var/www/html/cryptopix-bridge'
 
-# IMPORTANT: Change working directory so relative paths (like templates/, .env) work
-os.chdir(project_home)
-
 if project_home not in sys.path:
     sys.path.insert(0, project_home)
 

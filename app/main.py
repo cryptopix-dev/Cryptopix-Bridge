@@ -49,12 +49,8 @@ logging.basicConfig(
 )
 
 # Configure Flask app with correct template folder
-# Configure Flask app with absolute paths for WSGI compatibility
-basedir = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
-template_dir = os.path.join(basedir, 'templates')
-static_dir = os.path.join(basedir, 'static')
-
-app = Flask(__name__, template_folder=template_dir, static_folder=static_dir)
+app = Flask(__name__, template_folder='../templates',
+            static_folder='../static')
 app.secret_key = settings.SECRET_KEY
 
 # Configure session to be permanent and last until manual logout
@@ -4044,18 +4040,19 @@ def reconfigure_encrypted_database():
         new_table_configs = {}
 
         for key, value in request.form.items():
-            if key.startswith('config:::'):
-                # Parse the key: config:::tablename:::columnname
-                parts = key.split(':::')
-                if len(parts) >= 3:
-                    table_name = parts[1]
-                    column_name = parts[2]
+            if key.startswith('column_') and key.endswith('_config'):
+                # Parse the key: column_tablename_columnname_config
+                parts = key.replace('column_', '').replace(
+                    '_config', '').split('_', 1)
+                if len(parts) >= 2:
+                    table_name = parts[0]
+                    column_name = parts[1]
 
                     if table_name not in new_table_configs:
                         new_table_configs[table_name] = {}
 
                     # Get column data type from the form
-                    data_type_key = f"datatype:::{table_name}:::{column_name}"
+                    data_type_key = f"datatype_{table_name}_{column_name}"
                     data_type = request.form.get(data_type_key, 'TEXT')
 
                     new_table_configs[table_name][column_name] = {
@@ -4201,13 +4198,7 @@ def reconfigure_schema_and_data(migration_state, old_configs, new_configs):
                         data_type = 'TEXT'
                         log_system_event(
                             'WARNING', f'Column {col_name} had BLOB type, defaulting to TEXT', source='reconfiguration')
-                    
-                    # Fix for MySQL VARCHAR without length
-                    if target_db_type == "mysql" and data_type_upper.strip() == "VARCHAR":
-                         data_type = "VARCHAR(255)"
-                         log_system_event(
-                            'INFO', f'Corrected VARCHAR to VARCHAR(255) for MySQL column {col_name}', source='reconfiguration')
-                    
+
                     # Check for auto-increment
                     is_pk = pk_constraint and col_name in pk_constraint.get(
                         'constrained_columns', [])
